@@ -3,6 +3,14 @@
 Thanks for looking. This is a small, opinionated app — the guidance below is
 mostly about the few places where being casual would break something quietly.
 
+> [!NOTE]
+> This codebase was written by Claude (Anthropic's AI) as an experiment in
+> AI-assisted development — see the [README](README.md) for what that means.
+> It has no bearing on how contributions are reviewed: pull requests are judged
+> on the code, and the rules below apply to everyone equally. It is worth
+> knowing mainly because the comments are unusually dense about *why* a thing
+> is the way it is, and that reasoning is often the most useful part of a file.
+
 ## Getting set up
 
 ```bash

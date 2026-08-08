@@ -16,6 +16,25 @@ No account, no server, no telemetry. Your ledger is a SQLite file on your own di
 
 </div>
 
+> [!NOTE]
+> ### Built by Claude, as an experiment in AI-assisted development
+>
+> Every line of this repository — the app, the tests, this README — was written
+> by **Claude Opus 5** (Anthropic) across a single working session. A human
+> directed it: set the requirements, chose between the stacks on offer, decided
+> the scope, and made the product calls.
+>
+> What made it interesting was not the code generation. It was that the AI ran
+> the app, looked at its own output, and found bugs the tests had not caught —
+> a chart made unreadable by one rent payment, an insight engine that flagged
+> six categories at once because it averaged in months before the app existed, a
+> capture panel that opened focused on nothing. Those are documented throughout,
+> because they turned out to be the most instructive part.
+>
+> It is a working application, not a demo. But calibrate accordingly: it has one
+> person's real-world use behind it, not a community's. Read the code before you
+> trust it with your ledger — which is good advice for any finance app.
+
 ---
 
 ## Why this exists
