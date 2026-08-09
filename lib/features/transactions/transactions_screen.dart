@@ -30,8 +30,10 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(transactionRepositoryProvider);
+    // The whole ledger, not the capped "recent" list: this screen is the only
+    // place older entries can be found, so a limit here would hide them.
     final stream = _query.trim().isEmpty
-        ? ref.watch(recentTransactionsProvider)
+        ? ref.watch(allTransactionsProvider)
         : ref.watch(_searchProvider(_query));
 
     return Scaffold(

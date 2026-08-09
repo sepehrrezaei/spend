@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../ai/ai_providers.dart';
+import '../../ai/local_endpoint.dart';
 import '../../ai/ollama_provider.dart';
 import '../../core/providers.dart';
 import '../../core/theme/app_theme.dart';
@@ -19,6 +20,7 @@ class AiSection extends ConsumerStatefulWidget {
 
 class _AiSectionState extends ConsumerState<AiSection> {
   late final TextEditingController _host;
+  String? _hostError;
 
   @override
   void initState() {
@@ -92,12 +94,28 @@ class _AiSectionState extends ConsumerState<AiSection> {
                     children: [
                       TextField(
                         controller: _host,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Ollama address',
                           isDense: true,
                           helperText: 'Loopback only — nothing leaves this Mac',
+                          errorText: _hostError,
                         ),
+                        // Rejected here as well as at the request boundary.
+                        // The boundary is what makes the promise true; this is
+                        // so a mistyped address says why instead of just
+                        // reading as "not connected".
+                        onChanged: (_) {
+                          if (_hostError != null) {
+                            setState(() => _hostError = null);
+                          }
+                        },
                         onSubmitted: (v) {
+                          final problem = LocalEndpoint.describeProblem(v);
+                          if (problem != null) {
+                            setState(() => _hostError = problem);
+                            return;
+                          }
+                          setState(() => _hostError = null);
                           db.setSetting(SettingKeys.ollamaHost, v.trim());
                           ref.invalidate(aiAvailabilityProvider);
                         },

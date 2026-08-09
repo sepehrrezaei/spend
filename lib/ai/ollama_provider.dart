@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../domain/analytics/insight_rules.dart';
 import 'ai_provider.dart';
+import 'local_endpoint.dart';
 import 'prompt_builder.dart';
 
 /// Talks to a local Ollama instance over HTTP.
@@ -17,11 +18,20 @@ class OllamaProvider implements AiProvider {
   final String model;
   final http.Client _client;
 
+  /// The validated address, or `null` when [host] is not loopback.
+  ///
+  /// Resolved once, here, so that no request can be built from an address that
+  /// was never checked. A remote host would send the user's finances off the
+  /// machine and expose an unauthenticated Ollama, so a bad value has to fail
+  /// closed rather than be quietly contacted.
+  final Uri? _base;
+
   OllamaProvider({
     this.host = defaultHost,
     this.model = defaultModel,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _base = LocalEndpoint.tryParse(host),
+       _client = client ?? http.Client();
 
   static const defaultHost = 'http://127.0.0.1:11434';
   static const defaultModel = 'llama3.2:3b';
@@ -42,13 +52,22 @@ class OllamaProvider implements AiProvider {
   /// hanging forever.
   static const _generateTimeout = Duration(minutes: 3);
 
-  Uri _uri(String path) => Uri.parse('$host$path');
+  Uri _uri(Uri base, String path) => base.replace(path: path);
+
+  /// The message shown when the configured address is not local.
+  static const _notLocalReason =
+      'The configured address is not on this machine. Only localhost, '
+      '127.0.0.1 or ::1 are allowed, so nothing can leave your Mac.';
 
   @override
   Future<AiAvailability> check() async {
+    final base = _base;
+    if (base == null) {
+      return const AiAvailability.unavailable(_notLocalReason);
+    }
     try {
       final response = await _client
-          .get(_uri('/api/tags'))
+          .get(_uri(base, '/api/tags'))
           .timeout(_probeTimeout);
 
       if (response.statusCode != 200) {
@@ -97,12 +116,15 @@ class OllamaProvider implements AiProvider {
 
   @override
   Stream<String> narrate(FinanceBrief brief) async* {
+    final base = _base;
+    if (base == null) throw const AiException(_notLocalReason);
+
     final availability = await check();
     if (!availability.hasModel) {
       throw AiException(availability.reason ?? 'No model is available.');
     }
 
-    final request = http.Request('POST', _uri('/api/chat'))
+    final request = http.Request('POST', _uri(base, '/api/chat'))
       ..headers['content-type'] = 'application/json'
       ..body = jsonEncode({
         'model': availability.activeModel ?? model,

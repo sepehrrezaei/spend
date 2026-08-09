@@ -69,6 +69,21 @@ class Money implements Comparable<Money> {
     if (s.contains('-') || s.contains('+')) return null;
     if (s.isEmpty) return null;
 
+    // A fully grouped integer has no decimal part at all: "1.234.567" is one
+    // million, not 1234.57. Checked before the separator disambiguation below,
+    // which only ever looked at the *last* separator and so mis-read every
+    // number with more than one group.
+    //
+    // The leading digit must be 1-9 so that "0,005" is still read as a
+    // fraction — nobody groups thousands starting from zero. The backreference
+    // forces one consistent separator throughout.
+    if (RegExp(r'^[1-9][0-9]{0,2}([.,])[0-9]{3}(?:\1[0-9]{3})+$').hasMatch(s)) {
+      final digits = s.replaceAll(RegExp(r'[.,]'), '');
+      final value = int.tryParse(digits);
+      if (value == null) return null;
+      return Money(negative ? -value * 100 : value * 100);
+    }
+
     final lastDot = s.lastIndexOf('.');
     final lastComma = s.lastIndexOf(',');
     int decimalAt;

@@ -82,16 +82,28 @@ class CategoryRepository {
         CategoriesCompanion(isArchived: Value(archived)),
       );
 
-  /// How many transactions reference [id]. Callers use this to decide between
-  /// offering deletion and offering archiving.
+  /// How many rows reference [id]. Callers use this to decide between offering
+  /// deletion and offering archiving.
+  ///
+  /// Counts recurring rules as well as transactions. Both hold a RESTRICT
+  /// foreign key, so a category used only by a rule would otherwise pass this
+  /// check and then throw from the delete.
   Future<int> usageCount(int id) async {
-    final count = _db.transactions.id.count();
-    final row =
+    final txnCount = _db.transactions.id.count();
+    final txnRow =
         await (_db.selectOnly(_db.transactions)
-              ..addColumns([count])
+              ..addColumns([txnCount])
               ..where(_db.transactions.categoryId.equals(id)))
             .getSingle();
-    return row.read(count) ?? 0;
+
+    final ruleCount = _db.recurringRules.id.count();
+    final ruleRow =
+        await (_db.selectOnly(_db.recurringRules)
+              ..addColumns([ruleCount])
+              ..where(_db.recurringRules.categoryId.equals(id)))
+            .getSingle();
+
+    return (txnRow.read(txnCount) ?? 0) + (ruleRow.read(ruleCount) ?? 0);
   }
 
   /// Deletes a category, refusing when it still has history.

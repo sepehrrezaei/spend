@@ -12,6 +12,8 @@
 /// between a habit and an abandoned app.
 library;
 
+import 'dart:io' show exit;
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
@@ -132,10 +134,28 @@ class DesktopIntegration with TrayListener, WindowListener {
     }
   }
 
+  /// Channel onto `NSApplication.terminate`, implemented in
+  /// `macos/Runner/MainFlutterWindow.swift`.
+  static const _lifecycle = MethodChannel('spend/lifecycle');
+
   Future<void> _quit() async {
     await dispose();
     await windowManager.setPreventClose(false);
     await windowManager.destroy();
+
+    // Destroying the window is not enough. The app deliberately survives its
+    // last window so it can live in the menu bar, so without an explicit
+    // terminate "Quit Spend" leaves a headless process running with no window,
+    // no tray icon and no way back to it — the shortcut is gone and the only
+    // remedy is Activity Monitor. Ask AppKit to quit for real.
+    try {
+      await _lifecycle.invokeMethod<void>('terminate');
+    } on Object catch (e) {
+      // Never leave the user stuck in that headless state: if the channel is
+      // missing (an older Runner, or a non-macOS desktop host) exit directly.
+      debugPrint('Falling back to exit(): $e');
+      exit(0);
+    }
   }
 
   // ----------------------------------------------------------- window events

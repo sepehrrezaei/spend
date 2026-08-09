@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../core/day.dart';
 import 'ai_provider.dart';
 import 'chat_tools.dart';
+import 'local_endpoint.dart';
 
 /// One turn in the conversation.
 class ChatMessage {
@@ -60,12 +61,33 @@ class ChatService {
   final ChatTools tools;
   final http.Client _client;
 
+  /// The validated address, or `null` when [host] is not loopback.
+  ///
+  /// Chat sends far more of the ledger than the Insights brief does — whole
+  /// tool results, merchant names included — so the same guard the narration
+  /// path uses is enforced here too, at the point requests are built rather
+  /// than at the settings field that happens to set the value.
+  final Uri? _base;
+
   ChatService({
     required this.host,
     required this.model,
     required this.tools,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _base = LocalEndpoint.tryParse(host),
+       _client = client ?? http.Client();
+
+  /// The message shown when the configured address is not local.
+  static const _notLocalReason =
+      'The configured address is not on this machine. Only localhost, '
+      '127.0.0.1 or ::1 are allowed, so nothing can leave your Mac.';
+
+  /// The base URI for a request, or a refusal if the address is not local.
+  Uri _endpoint(String path) {
+    final base = _base;
+    if (base == null) throw const AiException(_notLocalReason);
+    return base.replace(path: path);
+  }
 
   /// Cap on tool rounds. A small model will occasionally loop, asking for the
   /// same query repeatedly; this stops that becoming an infinite conversation.
@@ -190,7 +212,7 @@ If the results contain nothing useful, say so plainly.''';
   }) async {
     final response = await _client
         .post(
-          Uri.parse('$host/api/chat'),
+          _endpoint('/api/chat'),
           headers: {'content-type': 'application/json'},
           body: jsonEncode({
             'model': model,
@@ -225,7 +247,7 @@ If the results contain nothing useful, say so plainly.''';
 
   /// The final answering round, streamed.
   Stream<String> _stream(List<Map<String, Object?>> messages) async* {
-    final request = http.Request('POST', Uri.parse('$host/api/chat'))
+    final request = http.Request('POST', _endpoint('/api/chat'))
       ..headers['content-type'] = 'application/json'
       ..body = jsonEncode({
         'model': model,

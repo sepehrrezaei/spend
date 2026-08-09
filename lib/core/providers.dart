@@ -231,8 +231,17 @@ final periodTransactionsProvider = StreamProvider<List<SpendRecord>>((ref) {
 });
 
 /// The most recent entries, independent of the selected period.
+///
+/// Capped — this feeds "recently used category" heuristics, where only the tail
+/// matters. Anything that *displays* history must use [allTransactionsProvider]
+/// instead, or older entries disappear once the ledger outgrows the cap.
 final recentTransactionsProvider = StreamProvider<List<SpendRecord>>(
   (ref) => ref.watch(transactionRepositoryProvider).watchRecent(),
+);
+
+/// Every transaction ever recorded, newest first, for the History screen.
+final allTransactionsProvider = StreamProvider<List<SpendRecord>>(
+  (ref) => ref.watch(transactionRepositoryProvider).watchAll(),
 );
 
 // ----------------------------------------------------------------- analytics

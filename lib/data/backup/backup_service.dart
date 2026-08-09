@@ -226,6 +226,22 @@ class BackupService {
     final payload = BackupPayload.fromJson(
       jsonDecode(utf8.decode(dataBytes)) as Map<String, Object?>,
     );
+
+    // The checksum covers data.json but not the manifest, so the counts shown
+    // in the restore dialog are unverified on their own. That dialog is where
+    // an irreversible "Replace everything" gets chosen, so a manifest claiming
+    // "0 transactions" over a payload holding hundreds must not be possible.
+    final actual = payload.counts;
+    for (final entry in manifest.counts.entries) {
+      final real = actual[entry.key];
+      if (real != null && real != entry.value) {
+        throw BackupFormatException(
+          'This backup is inconsistent: the manifest says ${entry.value} '
+          '${entry.key} but it contains $real. Nothing has been changed.',
+        );
+      }
+    }
+
     return (manifest: manifest, payload: payload);
   }
 
@@ -312,14 +328,49 @@ class BackupService {
       if (match != null) {
         categoryIdMap[oldId] = match;
       } else {
+        // Inserted without a parent for now; parents are wired up in a second
+        // pass below, once every archive id has a local counterpart.
         final newId = await _db
             .into(_db.categories)
-            .insert(_categoryRow(c, withId: false));
+            .insert(_categoryRow(c, withId: false, dropParent: true));
         categoryIdMap[oldId] = newId;
         byName[name.toLowerCase()] = newId;
         categoriesAdded++;
       }
     }
+
+    // Second pass for subcategory parents.
+    //
+    // The archive's ids mean nothing here, so a parent reference has to be
+    // translated through the id map. Carried over unmapped it would point at
+    // an unrelated category or fail the foreign key. Two passes rather than
+    // one because a child can appear before its parent in the archive.
+    for (final c in payload.categories) {
+      final archiveParent = (c['parent_id'] as num?)?.toInt();
+      if (archiveParent == null) continue;
+
+      final localId = categoryIdMap[(c['id'] as num).toInt()];
+      final localParent = categoryIdMap[archiveParent];
+      if (localId == null || localParent == null) continue;
+      // Never let a category parent itself: two archive ids can collapse onto
+      // one local category when both match the same name.
+      if (localId == localParent) continue;
+
+      await (_db.update(_db.categories)..where((t) => t.id.equals(localId)))
+          .write(CategoriesCompanion(parentId: Value(localParent)));
+    }
+
+    // Recurring rules dedupe on label, amount and category, the same way
+    // transactions do. Without it, merging one backup twice left two active
+    // copies of every subscription — and each copy would go on to log the
+    // charge again every month.
+    final existingRules = await _db.select(_db.recurringRules).get();
+    String ruleKey(String label, int amountMinor, int categoryId) =>
+        '${label.trim().toLowerCase()}|$amountMinor|$categoryId';
+    final rulesByKey = {
+      for (final r in existingRules)
+        ruleKey(r.label, r.amountMinor.minor, r.categoryId): r.id,
+    };
 
     final recurringIdMap = <int, int>{};
     var recurringAdded = 0;
@@ -327,9 +378,23 @@ class BackupService {
       final oldId = (r['id'] as num).toInt();
       final categoryId = categoryIdMap[(r['category_id'] as num).toInt()];
       if (categoryId == null) continue;
+
+      final key = ruleKey(
+        r['label'] as String,
+        (r['amount_minor'] as num).toInt(),
+        categoryId,
+      );
+      final existing = rulesByKey[key];
+      if (existing != null) {
+        // Already present: reuse it so transactions still link correctly.
+        recurringIdMap[oldId] = existing;
+        continue;
+      }
+
       final newId = await _db
           .into(_db.recurringRules)
           .insert(_recurringRow(r, withId: false, categoryId: categoryId));
+      rulesByKey[key] = newId;
       recurringIdMap[oldId] = newId;
       recurringAdded++;
     }
@@ -410,6 +475,10 @@ class BackupService {
   CategoriesCompanion _categoryRow(
     Map<String, Object?> c, {
     bool withId = true,
+
+    /// Merge inserts without a parent and fixes them up afterwards, because
+    /// the archive's parent id is meaningless against a different database.
+    bool dropParent = false,
   }) => CategoriesCompanion.insert(
     id: withId ? Value((c['id'] as num).toInt()) : const Value.absent(),
     name: c['name'] as String,
@@ -420,7 +489,7 @@ class BackupService {
       CategoryKind.values,
       CategoryKind.expense,
     ),
-    parentId: Value((c['parent_id'] as num?)?.toInt()),
+    parentId: Value(dropParent ? null : (c['parent_id'] as num?)?.toInt()),
     isArchived: Value(c['is_archived'] as bool? ?? false),
     sortOrder: Value((c['sort_order'] as num?)?.toInt() ?? 0),
   );

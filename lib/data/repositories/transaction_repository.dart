@@ -70,8 +70,21 @@ class TransactionRepository {
     return _map(await q.get());
   }
 
+  /// Every transaction, newest first.
+  ///
+  /// Uncapped on purpose: this backs the History screen, and a limit there
+  /// silently hides older entries once the ledger outgrows it.
+  Stream<List<SpendRecord>> watchAll() {
+    final q = _joined()
+      ..orderBy([
+        OrderingTerm.desc(_db.transactions.occurredOn),
+        OrderingTerm.desc(_db.transactions.id),
+      ]);
+    return q.watch().map(_map);
+  }
+
   /// The most recent transactions regardless of date, for the entry screen's
-  /// "recently used" affordances.
+  /// "recently used" affordances. Never use this to display history.
   Stream<List<SpendRecord>> watchRecent({int limit = 50}) {
     final q = _joined()
       ..orderBy([
@@ -126,15 +139,34 @@ class TransactionRepository {
 
   /// Natural keys of existing transactions, for import de-duplication.
   ///
-  /// Matches the key the backup merge uses, so importing the same bank CSV
-  /// twice does not double every row.
+  /// Includes the description, so two genuinely separate purchases of the same
+  /// amount on the same day — two transit fares, two coffees — stay two rows.
+  /// Date, amount and category alone collapse them into one.
+  ///
+  /// Deliberately the same shape as the backup merge key, so the two paths
+  /// agree on what "the same transaction" means.
   Future<Set<String>> existingKeys() async {
     final rows = await _db.select(_db.transactions).get();
     return {
       for (final t in rows)
-        '${t.occurredOn.iso}|${t.amountMinor.minor}|${t.categoryId}',
+        transactionKey(
+          amountMinor: t.amountMinor.minor,
+          occurredOn: t.occurredOn.iso,
+          categoryId: t.categoryId,
+          description: t.merchant.isNotEmpty ? t.merchant : t.note,
+        ),
     };
   }
+
+  /// The natural identity of a transaction, for de-duplication.
+  static String transactionKey({
+    required int amountMinor,
+    required String occurredOn,
+    required int categoryId,
+    required String description,
+  }) =>
+      '$occurredOn|$amountMinor|$categoryId|'
+      '${description.trim().toLowerCase()}';
 
   /// The earliest recorded date, or null when there is no history yet.
   /// Bounds the range pickers so they cannot wander into empty years.

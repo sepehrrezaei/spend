@@ -49,6 +49,23 @@ void main() {
       expect(Money.tryParse('1,999')!.minor, 199900);
     });
 
+    test('a fully grouped integer keeps every group', () {
+      // Regression: the disambiguation only ever looked at the *last*
+      // separator, so "1.234.567" was read as 1234 with .567 rounded to .57 —
+      // a million euros became twelve hundred.
+      expect(Money.tryParse('1.234.567')!.minor, 123456700);
+      expect(Money.tryParse('1,234,567')!.minor, 123456700);
+      expect(Money.tryParse('12.345.678')!.minor, 1234567800);
+      expect(Money.tryParse('123.456.789')!.minor, 12345678900);
+      expect(Money.tryParse('-1.234.567')!.minor, -123456700);
+      expect(Money.tryParse('€1.234.567')!.minor, 123456700);
+    });
+
+    test('a grouped integer with a decimal part still parses as one', () {
+      expect(Money.tryParse('1.234.567,89')!.minor, 123456789);
+      expect(Money.tryParse('1,234,567.89')!.minor, 123456789);
+    });
+
     test('grouping only applies where a grouped number is plausible', () {
       expect(Money.tryParse('0,005')!.minor, 1); // leading zero
       expect(Money.tryParse(',005')!.minor, 1); // no integer part

@@ -5,6 +5,7 @@ import '../../core/day.dart';
 import '../../core/money.dart';
 import '../../core/providers.dart';
 import '../../data/csv/csv_service.dart';
+import '../../data/repositories/transaction_repository.dart';
 import '../../domain/entities/enums.dart';
 
 Future<void> showCsvImportDialog(
@@ -36,6 +37,7 @@ class _CsvImportDialog extends ConsumerStatefulWidget {
 class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
   CsvMapping? _mapping;
   int? _fallbackCategoryId;
+  int? _incomeCategoryId;
   bool _skipDuplicates = true;
   bool _importing = false;
   String? _error;
@@ -82,15 +84,36 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
           })
         >[];
     var skipped = 0;
+    var skippedIncome = 0;
 
     for (final row in preview.rows) {
-      // A category name in the file is honoured when it matches one that
-      // exists; otherwise everything lands in the chosen fallback so nothing
-      // is silently dropped.
-      final categoryId =
-          byName[row.categoryName?.toLowerCase() ?? ''] ?? _fallbackCategoryId!;
+      // Direction lives on the category, not on the sign of the amount, so a
+      // credit must land in an income category as a positive magnitude. Filed
+      // under the expense fallback with its negative amount it would read as a
+      // refund and *reduce* spending rather than adding to income.
+      final named = byName[row.categoryName?.toLowerCase() ?? ''];
+      final int categoryId;
+      final Money amount;
+      if (row.isIncome) {
+        if (_incomeCategoryId == null) {
+          skippedIncome++;
+          continue;
+        }
+        categoryId = _incomeCategoryId!;
+        amount = row.amount.abs();
+      } else {
+        categoryId = named ?? _fallbackCategoryId!;
+        amount = row.amount;
+      }
 
-      final key = '${row.date.iso}|${row.amount.minor}|$categoryId';
+      // The same identity the backup merge uses. Date, amount and category
+      // alone would collapse two genuinely separate same-day fares into one.
+      final key = TransactionRepository.transactionKey(
+        amountMinor: amount.minor,
+        occurredOn: row.date.iso,
+        categoryId: categoryId,
+        description: row.description,
+      );
       if (_skipDuplicates && existing.contains(key)) {
         skipped++;
         continue;
@@ -98,7 +121,7 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
       existing.add(key);
 
       toInsert.add((
-        amount: row.amount,
+        amount: amount,
         categoryId: categoryId,
         occurredOn: row.date,
         merchant: row.description,
@@ -117,6 +140,7 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
           content: Text(
             'Imported $added transactions'
             '${skipped > 0 ? " · $skipped duplicates skipped" : ""}'
+            '${skippedIncome > 0 ? " · $skippedIncome credits skipped" : ""}'
             '${preview.rejected.isNotEmpty ? " · ${preview.rejected.length} rows unreadable" : ""}',
           ),
         ),
@@ -127,11 +151,16 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final money = ref.watch(moneyFormatterProvider);
-    final categories = (ref.watch(activeCategoriesProvider).value ?? const [])
+    final allCategories = ref.watch(activeCategoriesProvider).value ?? const [];
+    final categories = allCategories
         .where((c) => c.kind == CategoryKind.expense)
+        .toList();
+    final incomeCategories = allCategories
+        .where((c) => c.kind == CategoryKind.income)
         .toList();
     final mapping = _mapping;
     final preview = _preview;
+    final creditCount = preview?.rows.where((r) => r.isIncome).length ?? 0;
 
     return AlertDialog(
       title: Text('Import ${widget.fileName}'),
@@ -177,6 +206,37 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
                     _error = null;
                   }),
                 ),
+                // Only asked for when the file actually contains credits.
+                // Direction is a property of the category, so a credit filed
+                // under an expense category would read as a refund and reduce
+                // spending instead of adding to income.
+                if (creditCount > 0) ...[
+                  const SizedBox(height: 14),
+                  if (incomeCategories.isEmpty)
+                    Text(
+                      '$creditCount credit rows will be skipped — there is no '
+                      'income category to file them under. Create one in '
+                      'Settings → Categories first if you want them.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    )
+                  else
+                    DropdownButtonFormField<int>(
+                      initialValue: _incomeCategoryId,
+                      decoration: InputDecoration(
+                        labelText: 'Category for credits',
+                        helperText:
+                            '$creditCount rows look like income — skipped '
+                            'unless you choose a category',
+                      ),
+                      items: [
+                        for (final c in incomeCategories)
+                          DropdownMenuItem(value: c.id, child: Text(c.name)),
+                      ],
+                      onChanged: (v) => setState(() => _incomeCategoryId = v),
+                    ),
+                ],
                 const SizedBox(height: 8),
                 CheckboxListTile(
                   dense: true,
@@ -186,7 +246,7 @@ class _CsvImportDialogState extends ConsumerState<_CsvImportDialog> {
                   onChanged: (v) => setState(() => _skipDuplicates = v ?? true),
                   title: const Text('Skip rows that already exist'),
                   subtitle: Text(
-                    'Matched on date, amount and category',
+                    'Matched on date, amount, category and description',
                     style: theme.textTheme.bodySmall,
                   ),
                 ),

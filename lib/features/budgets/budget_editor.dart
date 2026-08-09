@@ -60,9 +60,16 @@ class _BudgetEditorDialogState extends ConsumerState<_BudgetEditorDialog> {
       setState(() => _error = 'Enter an amount');
       return;
     }
-    await ref
-        .read(budgetRepositoryProvider)
-        .setLimit(categoryId: _categoryId, period: _period, limit: limit);
+    final repo = ref.read(budgetRepositoryProvider);
+    await repo.setLimit(categoryId: _categoryId, period: _period, limit: limit);
+
+    // setLimit keys on the category, so re-pointing an existing budget at a
+    // different one writes a *second* budget and leaves the original in place.
+    // Editing "Groceries" into "Dining" has to move the budget, not clone it.
+    final existing = widget.existing;
+    if (existing != null && existing.categoryId != _categoryId) {
+      await repo.delete(existing.id);
+    }
     if (mounted) Navigator.of(context).pop();
   }
 
