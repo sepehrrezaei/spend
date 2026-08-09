@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Analyse and test
+    # A macOS runner, because this is a macOS app and the desktop build is
+    # part of what CI is verifying.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.x
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyse
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test
+
+  build:
+    name: Build macOS app
+    runs-on: macos-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.x
+          cache: true
+
+      - run: flutter pub get
+
+      # Release specifically: it is the only configuration that exercises icon
+      # font tree-shaking, which is where a stored-code-point icon would turn
+      # into a blank box while looking perfect in debug.
+      - name: Build release
+        run: flutter build macos --release
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: spend-macos
+          path: build/macos/Build/Products/Release/spend.app
+          retention-days: 7
