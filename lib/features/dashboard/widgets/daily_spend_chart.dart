@@ -54,26 +54,36 @@ class DailySpendChart extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            // Wrap rather than Row: the title, the "excl. recurring" note and
+            // two legend entries fit on one line in a desktop window and are
+            // 84pt too wide on an iPhone. Wrapping reflows them onto a second
+            // line instead of overflowing, at any width or text scale.
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 4,
               children: [
-                Text('Daily spending', style: theme.textTheme.titleSmall),
-                if (excludedFixed) ...[
-                  const SizedBox(width: 8),
-                  Tooltip(
-                    message:
-                        'Recurring costs like rent land as one large payment '
-                        'and would flatten the rest of the chart.',
-                    child: Text(
-                      'excl. ${money.format(summary.fixedTotal)} recurring',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Daily spending', style: theme.textTheme.titleSmall),
+                    if (excludedFixed) ...[
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message:
+                            'Recurring costs like rent land as one large '
+                            'payment and would flatten the rest of the chart.',
+                        child: Text(
+                          'excl. ${money.format(summary.fixedTotal)} recurring',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
-                const Spacer(),
+                    ],
+                  ],
+                ),
                 _LegendDot(color: scheme.primary, label: 'per day'),
-                const SizedBox(width: 12),
                 _LegendDot(
                   color: scheme.tertiary,
                   label: '$_window-day average',
