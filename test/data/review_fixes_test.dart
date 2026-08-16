@@ -69,6 +69,30 @@ void main() {
         );
       },
     );
+
+    test('search returns every matching transaction, past the old 200-row cap',
+        () async {
+      // 210 rows with the same merchant: the last 10 were silently dropped
+      // under the old limit = 200 default.
+      for (var i = 0; i < 210; i++) {
+        await addTxn(
+          minor: 100 + i,
+          on: Day(2026, 1, 1).addDays(i),
+          merchant: 'Albert Heijn',
+        );
+      }
+      // One extra row that must NOT appear in results.
+      await addTxn(minor: 999, on: Day(2026, 1, 1), merchant: 'Other Store');
+
+      final results = await transactions.search('Albert Heijn').first;
+
+      expect(results.length, 210, reason: 'all 210 matches must come back');
+      expect(
+        results.every((r) => r.merchant == 'Albert Heijn'),
+        isTrue,
+        reason: 'only matching transactions are returned',
+      );
+    });
   });
 
   group('import de-duplication', () {

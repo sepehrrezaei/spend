@@ -247,7 +247,11 @@ class TransactionRepository {
       );
 
   /// Free-text search over merchant and note.
-  Stream<List<SpendRecord>> search(String term, {int limit = 200}) {
+  ///
+  /// [limit] is `null` by default (no cap): this backs the History screen, and
+  /// silently hiding older matches is worse than showing none. Pass a value
+  /// only when an explicit cap is acceptable (e.g., autocomplete previews).
+  Stream<List<SpendRecord>> search(String term, {int? limit}) {
     final pattern = '%${term.trim()}%';
     final q = _joined()
       ..where(
@@ -255,8 +259,8 @@ class TransactionRepository {
             _db.transactions.note.like(pattern) |
             _db.categories.name.like(pattern),
       )
-      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)])
-      ..limit(limit);
+      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)]);
+    if (limit != null) q.limit(limit);
     return q.watch().map(_map);
   }
 
