@@ -51,3 +51,6 @@ app.*.map.json
 # `dart run build_runner build` after changing anything under lib/data/db/.
 # pubspec.lock is committed too — this is an application, not a package, and
 # pinned versions make builds reproducible.
+
+# Generated knowledge graph (graphify) — rebuildable from source
+graphify-out/

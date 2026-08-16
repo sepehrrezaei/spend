@@ -19,13 +19,18 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final summaryAsync = ref.watch(periodSummaryProvider);
 
+    // The period bar stacks into two rows below [_PeriodBar.wideEnough], and
+    // an AppBar bottom is given a fixed height rather than measuring its child
+    // — so a single figure here clips the title on a phone.
+    final stacked = MediaQuery.sizeOf(context).width < _PeriodBar.wideEnough;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Overview'),
         centerTitle: false,
-        bottom: const PreferredSize(
-          preferredSize: Size.fromHeight(50),
-          child: ContentWidth(maxWidth: 1000, child: _PeriodBar()),
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(stacked ? 104 : 50),
+          child: const ContentWidth(maxWidth: 1000, child: _PeriodBar()),
         ),
       ),
       body: summaryAsync.when(
@@ -58,6 +63,13 @@ class DashboardScreen extends ConsumerWidget {
 class _PeriodBar extends ConsumerWidget {
   const _PeriodBar();
 
+  /// Width at which the segments and the stepper fit on one line.
+  ///
+  /// Five segments plus a labelled stepper need roughly this much; below it
+  /// they overflowed the row outright on an iPhone. Shared with the AppBar,
+  /// which has to reserve the taller slot for the stacked layout.
+  static const wideEnough = 730.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selection = ref.watch(periodProvider);
@@ -74,50 +86,67 @@ class _PeriodBar extends ConsumerWidget {
       PeriodType.year,
     ];
 
+    final periods = SegmentedButton<PeriodType>(
+      showSelectedIcon: false,
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      segments: [
+        for (final p in selectable)
+          ButtonSegment(value: p, label: Text(p.label)),
+      ],
+      selected: {
+        selectable.contains(selection.type) ? selection.type : PeriodType.month,
+      },
+      onSelectionChanged: (s) => notifier.setType(s.first),
+    );
+
+    final stepper = [
+      IconButton(
+        icon: const Icon(Icons.chevron_left),
+        tooltip: 'Previous',
+        onPressed: () => notifier.step(-1),
+      ),
+      ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 150),
+        child: Text(
+          _rangeLabel(range, selection.type),
+          textAlign: TextAlign.center,
+          style: theme.textTheme.titleSmall,
+        ),
+      ),
+      IconButton(
+        icon: const Icon(Icons.chevron_right),
+        tooltip: 'Next',
+        // Stepping past today would only ever show an empty period.
+        onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
+      ),
+      const SizedBox(width: 4),
+      TextButton(onPressed: notifier.jumpToToday, child: const Text('Today')),
+    ];
+
+    // Below the threshold the two groups stack, and the segments scroll
+    // horizontally so the row cannot overflow again at any width or text scale.
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: Row(
-        children: [
-          SegmentedButton<PeriodType>(
-            showSelectedIcon: false,
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: [
-              for (final p in selectable)
-                ButtonSegment(value: p, label: Text(p.label)),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth >= wideEnough) {
+            return Row(children: [periods, const Spacer(), ...stepper]);
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: periods,
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: stepper,
+              ),
             ],
-            selected: {
-              selectable.contains(selection.type)
-                  ? selection.type
-                  : PeriodType.month,
-            },
-            onSelectionChanged: (s) => notifier.setType(s.first),
-          ),
-          const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            tooltip: 'Previous',
-            onPressed: () => notifier.step(-1),
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 150),
-            child: Text(
-              _rangeLabel(range, selection.type),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.titleSmall,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            tooltip: 'Next',
-            // Stepping past today would only ever show an empty period.
-            onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
-          ),
-          const SizedBox(width: 4),
-          TextButton(
-            onPressed: notifier.jumpToToday,
-            child: const Text('Today'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
