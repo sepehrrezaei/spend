@@ -78,12 +78,14 @@ class _PeriodBar extends ConsumerWidget {
   /// Width the bar itself needs before the segments and the stepper are put on
   /// one line.
   ///
-  /// Deliberately generous. Measured against a rendered iPad at 802pt the row
-  /// wanted about 785 — seventeen points of headroom, which "September 2026"
-  /// would have swallowed, never mind a longer locale or a wider font. The
-  /// first attempt at this number was 730 and overflowed in production for
-  /// exactly that reason. Stacking early costs one line; guessing low costs a
-  /// clipped layout, so the bias belongs on this side.
+  /// Deliberately generous: measured, the row wants about 963. The first
+  /// attempt at this number was 730, chosen by eye, and overflowed in
+  /// production. Stacking early costs one line; guessing low costs a clipped
+  /// layout, so the bias belongs on this side.
+  ///
+  /// The margin above it is thin — [contentMaxWidth] leaves 968 — which is why
+  /// the date label in the single-row layout is [Flexible] rather than fixed.
+  /// A threshold alone would be one long month name away from wrong again.
   static const wideEnough = 960.0;
 
   @override
@@ -115,29 +117,44 @@ class _PeriodBar extends ConsumerWidget {
       onSelectionChanged: (s) => notifier.setType(s.first),
     );
 
-    final stepper = [
-      IconButton(
-        icon: const Icon(Icons.chevron_left),
-        tooltip: 'Previous',
-        onPressed: () => notifier.step(-1),
+    // The date label is the only part of the stepper that can give, and in
+    // the single-row layout it has to: the row wants ~963pt against the 968
+    // that [contentMaxWidth] leaves, so five points separate "fits" from
+    // "clipped" — and "September 2026" is wider than the "August 2026" this
+    // was measured against. An ellipsis is a worse label; an overflow is a
+    // broken screen.
+    //
+    // It is only wrapped in Flexible on the Row branch. Flexible is a
+    // ParentDataWidget for Flex, and putting one inside the stacked layout's
+    // Wrap throws outright.
+    final label = ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150),
+      child: Text(
+        _rangeLabel(range, selection.type),
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleSmall,
       ),
-      ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 150),
-        child: Text(
-          _rangeLabel(range, selection.type),
-          textAlign: TextAlign.center,
-          style: theme.textTheme.titleSmall,
-        ),
-      ),
-      IconButton(
-        icon: const Icon(Icons.chevron_right),
-        tooltip: 'Next',
-        // Stepping past today would only ever show an empty period.
-        onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
-      ),
-      const SizedBox(width: 4),
-      TextButton(onPressed: notifier.jumpToToday, child: const Text('Today')),
-    ];
+    );
+
+    final previous = IconButton(
+      icon: const Icon(Icons.chevron_left),
+      tooltip: 'Previous',
+      onPressed: () => notifier.step(-1),
+    );
+
+    final next = IconButton(
+      icon: const Icon(Icons.chevron_right),
+      tooltip: 'Next',
+      // Stepping past today would only ever show an empty period.
+      onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
+    );
+
+    final today = TextButton(
+      onPressed: notifier.jumpToToday,
+      child: const Text('Today'),
+    );
 
     // Measured here rather than from the window, so the decision is made
     // against the width the bar is actually given. Stacked, neither group can
@@ -147,7 +164,17 @@ class _PeriodBar extends ConsumerWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth >= wideEnough) {
-            return Row(children: [periods, const Spacer(), ...stepper]);
+            return Row(
+              children: [
+                periods,
+                const Spacer(),
+                previous,
+                Flexible(child: label),
+                next,
+                const SizedBox(width: 4),
+                today,
+              ],
+            );
           }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -160,7 +187,13 @@ class _PeriodBar extends ConsumerWidget {
               Wrap(
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,
-                children: stepper,
+                children: [
+                  previous,
+                  label,
+                  next,
+                  const SizedBox(width: 4),
+                  today,
+                ],
               ),
             ],
           );

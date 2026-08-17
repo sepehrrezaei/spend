@@ -2,9 +2,11 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:spend/core/date_range.dart';
 import 'package:spend/core/day.dart';
 import 'package:spend/core/money.dart';
 import 'package:spend/core/providers.dart';
+import 'package:spend/core/theme/app_theme.dart';
 import 'package:spend/data/db/database.dart';
 import 'package:spend/features/dashboard/dashboard_screen.dart';
 
@@ -53,15 +55,27 @@ void main() {
     WidgetTester tester,
     Size size, {
     double textScale = 1.0,
+    void Function(ProviderContainer)? before,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
+    final container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    addTearDown(container.dispose);
+    before?.call(container);
+
     await tester.pumpWidget(
-      ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(db)],
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp(
+          // The production theme, not the default one. AppTheme sets
+          // useMaterial3 and VisualDensity.compact, both of which change
+          // intrinsic control sizes — a guard measured against a different
+          // theme is measuring a layout the app never renders.
+          theme: AppTheme.light(),
           home: MediaQuery(
             data: MediaQueryData(
               size: size,
@@ -118,6 +132,26 @@ void main() {
     final title = tester.getRect(find.text('Overview'));
     expect(title.top, greaterThanOrEqualTo(0));
     expect(title.height, greaterThan(0));
+    await disposeHost(tester);
+  });
+
+  testWidgets('the widest date label does not clip the single-row bar', (
+    tester,
+  ) async {
+    await seed();
+    // A custom range renders the longest label the bar can produce
+    // ("2026-01-01 – 2026-12-31"), against the tightest wide layout: the
+    // single row wants ~963pt and ContentWidth leaves 968. The month names
+    // this was originally measured with were the short ones.
+    await pumpAt(
+      tester,
+      const Size(1400, 900),
+      before: (container) => container
+          .read(periodProvider.notifier)
+          .setCustom(DateRange(Day(2026, 1, 1), Day(2026, 12, 31))),
+    );
+
+    expect(tester.takeException(), isNull);
     await disposeHost(tester);
   });
 
