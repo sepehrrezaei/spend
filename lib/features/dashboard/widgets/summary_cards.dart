@@ -23,10 +23,14 @@ class SummaryCards extends ConsumerWidget {
         final itemWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
 
-        // A fixed height rather than an aspect ratio. Aspect ratios couple
-        // card height to window width, so narrowing the window silently
-        // clipped the captions — three lines of text need the space they need
-        // regardless of how wide the card is.
+        // A minimum height rather than an aspect ratio or a fixed one.
+        //
+        // Aspect ratios couple card height to window width, so narrowing the
+        // window silently clipped the captions. A fixed height has the same
+        // fault in the other direction: the card holds three lines of text,
+        // and at an accessibility text scale that text needs more room than
+        // any number chosen here. A minimum keeps the four cards uniform
+        // while letting them grow when the content does.
         final cards = <Widget>[
           _Card(
             label: 'Spent',
@@ -61,7 +65,14 @@ class SummaryCards extends ConsumerWidget {
           runSpacing: spacing,
           children: [
             for (final card in cards)
-              SizedBox(width: itemWidth, height: 96, child: card),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: itemWidth,
+                  maxWidth: itemWidth,
+                  minHeight: 96,
+                ),
+                child: card,
+              ),
           ],
         );
       },
@@ -133,6 +144,8 @@ class _Card extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
+          // Sized by its content, so the card grows rather than overflowing.
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               label.toUpperCase(),

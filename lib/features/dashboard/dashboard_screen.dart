@@ -19,36 +19,51 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final summaryAsync = ref.watch(periodSummaryProvider);
 
+    // The period bar sits at the top of the body rather than in the AppBar's
+    // `bottom`.
+    //
+    // A PreferredSize is given a height rather than measuring its child, so
+    // putting a bar there that changes height means computing that height
+    // separately from the layout that produces it — two measurements that
+    // have to agree, and did not: there was a band of widths where the bar
+    // stacked while only the single-row height had been reserved, clipping
+    // the title. Here the bar simply takes the height it needs.
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Overview'),
-        centerTitle: false,
-        bottom: const PreferredSize(
-          preferredSize: Size.fromHeight(50),
-          child: ContentWidth(maxWidth: 1000, child: _PeriodBar()),
-        ),
-      ),
-      body: summaryAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) =>
-            Center(child: Text('Could not analyse this period: $e')),
-        data: (summary) => ContentWidth(
-          maxWidth: 1000,
-          child: summary.isEmpty
-              ? const _EmptyPeriod()
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                  children: [
-                    SummaryCards(summary: summary),
-                    const SizedBox(height: 12),
-                    DailySpendChart(summary: summary),
-                    const SizedBox(height: 12),
-                    CategoryBreakdown(summary: summary),
-                    const SizedBox(height: 12),
-                    _FootNotes(summary: summary),
-                  ],
-                ),
-        ),
+      appBar: AppBar(title: const Text('Overview'), centerTitle: false),
+      body: Column(
+        children: [
+          Material(
+            color: Theme.of(context).appBarTheme.backgroundColor,
+            child: const ContentWidth(
+              maxWidth: _PeriodBar.contentMaxWidth,
+              child: _PeriodBar(),
+            ),
+          ),
+          Expanded(
+            child: summaryAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) =>
+                  Center(child: Text('Could not analyse this period: $e')),
+              data: (summary) => ContentWidth(
+                maxWidth: 1000,
+                child: summary.isEmpty
+                    ? const _EmptyPeriod()
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                        children: [
+                          SummaryCards(summary: summary),
+                          const SizedBox(height: 12),
+                          DailySpendChart(summary: summary),
+                          const SizedBox(height: 12),
+                          CategoryBreakdown(summary: summary),
+                          const SizedBox(height: 12),
+                          _FootNotes(summary: summary),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -57,6 +72,21 @@ class DashboardScreen extends ConsumerWidget {
 /// Period type selector plus back/forward stepping.
 class _PeriodBar extends ConsumerWidget {
   const _PeriodBar();
+
+  static const contentMaxWidth = 1000.0;
+
+  /// Width the bar itself needs before the segments and the stepper are put on
+  /// one line.
+  ///
+  /// Deliberately generous: measured, the row wants about 963. The first
+  /// attempt at this number was 730, chosen by eye, and overflowed in
+  /// production. Stacking early costs one line; guessing low costs a clipped
+  /// layout, so the bias belongs on this side.
+  ///
+  /// The margin above it is thin — [contentMaxWidth] leaves 968 — which is why
+  /// the date label in the single-row layout is [Flexible] rather than fixed.
+  /// A threshold alone would be one long month name away from wrong again.
+  static const wideEnough = 960.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -74,50 +104,100 @@ class _PeriodBar extends ConsumerWidget {
       PeriodType.year,
     ];
 
+    final periods = SegmentedButton<PeriodType>(
+      showSelectedIcon: false,
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      segments: [
+        for (final p in selectable)
+          ButtonSegment(value: p, label: Text(p.label)),
+      ],
+      selected: {
+        selectable.contains(selection.type) ? selection.type : PeriodType.month,
+      },
+      onSelectionChanged: (s) => notifier.setType(s.first),
+    );
+
+    // The date label is the only part of the stepper that can give, and in
+    // the single-row layout it has to: the row wants ~963pt against the 968
+    // that [contentMaxWidth] leaves, so five points separate "fits" from
+    // "clipped" — and "September 2026" is wider than the "August 2026" this
+    // was measured against. An ellipsis is a worse label; an overflow is a
+    // broken screen.
+    //
+    // It is only wrapped in Flexible on the Row branch. Flexible is a
+    // ParentDataWidget for Flex, and putting one inside the stacked layout's
+    // Wrap throws outright.
+    final label = ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150),
+      child: Text(
+        _rangeLabel(range, selection.type),
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleSmall,
+      ),
+    );
+
+    final previous = IconButton(
+      icon: const Icon(Icons.chevron_left),
+      tooltip: 'Previous',
+      onPressed: () => notifier.step(-1),
+    );
+
+    final next = IconButton(
+      icon: const Icon(Icons.chevron_right),
+      tooltip: 'Next',
+      // Stepping past today would only ever show an empty period.
+      onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
+    );
+
+    final today = TextButton(
+      onPressed: notifier.jumpToToday,
+      child: const Text('Today'),
+    );
+
+    // Measured here rather than from the window, so the decision is made
+    // against the width the bar is actually given. Stacked, neither group can
+    // overflow: the segments scroll and the stepper wraps.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: Row(
-        children: [
-          SegmentedButton<PeriodType>(
-            showSelectedIcon: false,
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: [
-              for (final p in selectable)
-                ButtonSegment(value: p, label: Text(p.label)),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth >= wideEnough) {
+            return Row(
+              children: [
+                periods,
+                const Spacer(),
+                previous,
+                Flexible(child: label),
+                next,
+                const SizedBox(width: 4),
+                today,
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: periods,
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  previous,
+                  label,
+                  next,
+                  const SizedBox(width: 4),
+                  today,
+                ],
+              ),
             ],
-            selected: {
-              selectable.contains(selection.type)
-                  ? selection.type
-                  : PeriodType.month,
-            },
-            onSelectionChanged: (s) => notifier.setType(s.first),
-          ),
-          const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            tooltip: 'Previous',
-            onPressed: () => notifier.step(-1),
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 150),
-            child: Text(
-              _rangeLabel(range, selection.type),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.titleSmall,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            tooltip: 'Next',
-            // Stepping past today would only ever show an empty period.
-            onPressed: range.end >= Day.today() ? null : () => notifier.step(1),
-          ),
-          const SizedBox(width: 4),
-          TextButton(
-            onPressed: notifier.jumpToToday,
-            child: const Text('Today'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

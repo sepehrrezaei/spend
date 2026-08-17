@@ -54,15 +54,26 @@ class DailySpendChart extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            // Wrap rather than Row: the title, the "excl. recurring" note and
+            // two legend entries fit on one line in a desktop window and are
+            // 84pt too wide on an iPhone.
+            //
+            // All four are direct children. Grouping the title and the note
+            // into a nested Row would reintroduce the same failure one level
+            // down — a Row cannot wrap, so at a large enough text scale that
+            // pair alone would overflow while the Wrap around it sat with
+            // space to spare.
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 Text('Daily spending', style: theme.textTheme.titleSmall),
-                if (excludedFixed) ...[
-                  const SizedBox(width: 8),
+                if (excludedFixed)
                   Tooltip(
                     message:
-                        'Recurring costs like rent land as one large payment '
-                        'and would flatten the rest of the chart.',
+                        'Recurring costs like rent land as one large '
+                        'payment and would flatten the rest of the chart.',
                     child: Text(
                       'excl. ${money.format(summary.fixedTotal)} recurring',
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -70,10 +81,8 @@ class DailySpendChart extends ConsumerWidget {
                       ),
                     ),
                   ),
-                ],
-                const Spacer(),
+                const SizedBox(width: 4),
                 _LegendDot(color: scheme.primary, label: 'per day'),
-                const SizedBox(width: 12),
                 _LegendDot(
                   color: scheme.tertiary,
                   label: '$_window-day average',
