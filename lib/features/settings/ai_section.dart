@@ -20,17 +20,20 @@ class AiSection extends ConsumerStatefulWidget {
 
 class _AiSectionState extends ConsumerState<AiSection> {
   late final TextEditingController _host;
+  late final TextEditingController _pullModel;
   String? _hostError;
 
   @override
   void initState() {
     super.initState();
     _host = TextEditingController();
+    _pullModel = TextEditingController(text: OllamaProvider.defaultModel);
   }
 
   @override
   void dispose() {
     _host.dispose();
+    _pullModel.dispose();
     super.dispose();
   }
 
@@ -46,6 +49,7 @@ class _AiSectionState extends ConsumerState<AiSection> {
     final model =
         ref.watch(ollamaModelProvider).value ?? OllamaProvider.defaultModel;
     final availability = ref.watch(aiAvailabilityProvider);
+    final pull = ref.watch(modelPullProvider);
 
     if (_host.text != host && !_host.selection.isValid) _host.text = host;
 
@@ -147,11 +151,24 @@ class _AiSectionState extends ConsumerState<AiSection> {
                                 ),
                                 items: [
                                   for (final m in a.models)
-                                    DropdownMenuItem(value: m, child: Text(m)),
+                                    DropdownMenuItem(
+                                      value: m,
+                                      child: _ModelLabel(m),
+                                    ),
                                 ],
                                 onChanged: (v) => v == null
                                     ? null
                                     : db.setSetting(SettingKeys.ollamaModel, v),
+                              ),
+                            ],
+                            if (a.reachable) ...[
+                              const SizedBox(height: 12),
+                              _PullSection(
+                                controller: _pullModel,
+                                pullState: pull,
+                                onPull: () => ref
+                                    .read(modelPullProvider.notifier)
+                                    .pull(_pullModel.text),
                               ),
                             ],
                             if (!a.reachable) ...[
@@ -168,6 +185,108 @@ class _AiSectionState extends ConsumerState<AiSection> {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// Displays the model name with a "recommended" badge for the default model.
+class _ModelLabel extends StatelessWidget {
+  final String name;
+  const _ModelLabel(this.name);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isRecommended = name == OllamaProvider.defaultModel;
+    return Row(
+      children: [
+        Expanded(child: Text(name)),
+        if (isRecommended) ...[
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              'recommended',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The pull-model row: a text field pre-filled with the recommended model, a
+/// Pull button, and a progress bar + status line while the download runs.
+class _PullSection extends StatelessWidget {
+  final TextEditingController controller;
+  final ModelPullState pullState;
+  final VoidCallback onPull;
+
+  const _PullSection({
+    required this.controller,
+    required this.pullState,
+    required this.onPull,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isPulling = pullState.isPulling;
+    final isDone = pullState.status == PullStatus.done;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                enabled: !isPulling,
+                decoration: const InputDecoration(
+                  labelText: 'Pull a model',
+                  hintText: OllamaProvider.defaultModel,
+                  isDense: true,
+                  helperText: '~2 GB · comfortable on 16 GB RAM',
+                ),
+                onSubmitted: (_) => onPull(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonal(
+              onPressed: isPulling ? null : onPull,
+              child: const Text('Pull'),
+            ),
+          ],
+        ),
+        if (isPulling || isDone || pullState.status == PullStatus.failed) ...[
+          const SizedBox(height: 8),
+          if (isPulling)
+            LinearProgressIndicator(value: pullState.fraction)
+          else
+            const SizedBox(height: 4),
+          const SizedBox(height: 4),
+          Text(
+            pullState.error ??
+                (isDone ? '✓ Done' : pullState.statusMessage),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: pullState.error != null
+                  ? theme.colorScheme.error
+                  : isDone
+                  ? theme.colorScheme.decrease
+                  : theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -224,15 +343,14 @@ class _StartHint extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'To switch it on, from the project folder:',
+            'To start Ollama, from the project folder:',
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 6),
           SelectableText(
-            'docker compose up -d\n'
-            'docker compose exec ollama ollama pull llama3.2:3b',
+            'docker compose up -d',
             style: theme.textTheme.bodySmall?.copyWith(
               fontFamily: 'Menlo',
               fontSize: 11.5,

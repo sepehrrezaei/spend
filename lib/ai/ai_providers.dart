@@ -118,7 +118,100 @@ final financeBriefProvider = Provider<AsyncValue<FinanceBrief>>((ref) {
       );
 });
 
-// ----------------------------------------------------------------- narration
+// ------------------------------------------------------------------- pull
+
+enum PullStatus { idle, pulling, done, failed }
+
+class ModelPullState {
+  final PullStatus status;
+  final String statusMessage;
+
+  /// Download fraction in [0, 1], or `null` when Ollama has not sent byte
+  /// counts yet (e.g. during "pulling manifest").
+  final double? fraction;
+  final String? error;
+
+  const ModelPullState({
+    this.status = PullStatus.idle,
+    this.statusMessage = '',
+    this.fraction,
+    this.error,
+  });
+
+  bool get isPulling => status == PullStatus.pulling;
+}
+
+/// Drives an `/api/pull` request and tracks streaming progress.
+///
+/// Tied to the current provider so that changing the host or toggling Local AI
+/// off resets it — a pull to the old address should not bleed into a new one.
+class ModelPull extends Notifier<ModelPullState> {
+  StreamSubscription<PullProgress>? _sub;
+
+  @override
+  ModelPullState build() {
+    ref.onDispose(() => _sub?.cancel());
+    ref.watch(aiProviderProvider); // reset when provider changes
+    return const ModelPullState();
+  }
+
+  Future<void> pull(String modelName) async {
+    if (state.isPulling) return;
+    final name = modelName.trim();
+    if (name.isEmpty) return;
+
+    final provider = ref.read(aiProviderProvider);
+    if (provider is! OllamaProvider) {
+      state = const ModelPullState(
+        status: PullStatus.failed,
+        error: 'Local AI is not enabled.',
+      );
+      return;
+    }
+
+    await _sub?.cancel();
+    state = ModelPullState(
+      status: PullStatus.pulling,
+      statusMessage: 'Starting…',
+    );
+
+    _sub = provider.pullModel(name).listen(
+      (p) {
+        state = ModelPullState(
+          status: PullStatus.pulling,
+          statusMessage: p.status,
+          fraction: p.fraction,
+        );
+      },
+      onError: (Object e) {
+        state = ModelPullState(
+          status: PullStatus.failed,
+          error: e is AiException ? e.message : e.toString(),
+        );
+      },
+      onDone: () {
+        // If we never heard "success" treat it as complete anyway.
+        if (state.isPulling) {
+          state = ModelPullState(
+            status: PullStatus.done,
+            statusMessage: state.statusMessage,
+          );
+        }
+        // Refresh availability so the new model shows up in the dropdown.
+        ref.invalidate(aiAvailabilityProvider);
+      },
+    );
+  }
+
+  void reset() {
+    _sub?.cancel();
+    state = const ModelPullState();
+  }
+}
+
+final modelPullProvider = NotifierProvider<ModelPull, ModelPullState>(
+  ModelPull.new,
+);
 
 enum NarrationStatus { idle, running, done, failed }
 
