@@ -19,41 +19,51 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final summaryAsync = ref.watch(periodSummaryProvider);
 
-    // The period bar stacks into two rows below [_PeriodBar.wideEnough], and
-    // an AppBar bottom is given a fixed height rather than measuring its child
-    // — so a single figure here clips the title on a phone.
-    final stacked = MediaQuery.sizeOf(context).width < _PeriodBar.wideEnough;
-
+    // The period bar sits at the top of the body rather than in the AppBar's
+    // `bottom`.
+    //
+    // A PreferredSize is given a height rather than measuring its child, so
+    // putting a bar there that changes height means computing that height
+    // separately from the layout that produces it — two measurements that
+    // have to agree, and did not: there was a band of widths where the bar
+    // stacked while only the single-row height had been reserved, clipping
+    // the title. Here the bar simply takes the height it needs.
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Overview'),
-        centerTitle: false,
-        bottom: PreferredSize(
-          preferredSize: Size.fromHeight(stacked ? 104 : 50),
-          child: const ContentWidth(maxWidth: 1000, child: _PeriodBar()),
-        ),
-      ),
-      body: summaryAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) =>
-            Center(child: Text('Could not analyse this period: $e')),
-        data: (summary) => ContentWidth(
-          maxWidth: 1000,
-          child: summary.isEmpty
-              ? const _EmptyPeriod()
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                  children: [
-                    SummaryCards(summary: summary),
-                    const SizedBox(height: 12),
-                    DailySpendChart(summary: summary),
-                    const SizedBox(height: 12),
-                    CategoryBreakdown(summary: summary),
-                    const SizedBox(height: 12),
-                    _FootNotes(summary: summary),
-                  ],
-                ),
-        ),
+      appBar: AppBar(title: const Text('Overview'), centerTitle: false),
+      body: Column(
+        children: [
+          Material(
+            color: Theme.of(context).appBarTheme.backgroundColor,
+            child: const ContentWidth(
+              maxWidth: _PeriodBar.contentMaxWidth,
+              child: _PeriodBar(),
+            ),
+          ),
+          Expanded(
+            child: summaryAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) =>
+                  Center(child: Text('Could not analyse this period: $e')),
+              data: (summary) => ContentWidth(
+                maxWidth: 1000,
+                child: summary.isEmpty
+                    ? const _EmptyPeriod()
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                        children: [
+                          SummaryCards(summary: summary),
+                          const SizedBox(height: 12),
+                          DailySpendChart(summary: summary),
+                          const SizedBox(height: 12),
+                          CategoryBreakdown(summary: summary),
+                          const SizedBox(height: 12),
+                          _FootNotes(summary: summary),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -63,12 +73,18 @@ class DashboardScreen extends ConsumerWidget {
 class _PeriodBar extends ConsumerWidget {
   const _PeriodBar();
 
-  /// Width at which the segments and the stepper fit on one line.
+  static const contentMaxWidth = 1000.0;
+
+  /// Width the bar itself needs before the segments and the stepper are put on
+  /// one line.
   ///
-  /// Five segments plus a labelled stepper need roughly this much; below it
-  /// they overflowed the row outright on an iPhone. Shared with the AppBar,
-  /// which has to reserve the taller slot for the stacked layout.
-  static const wideEnough = 730.0;
+  /// Deliberately generous. Measured against a rendered iPad at 802pt the row
+  /// wanted about 785 — seventeen points of headroom, which "September 2026"
+  /// would have swallowed, never mind a longer locale or a wider font. The
+  /// first attempt at this number was 730 and overflowed in production for
+  /// exactly that reason. Stacking early costs one line; guessing low costs a
+  /// clipped layout, so the bias belongs on this side.
+  static const wideEnough = 960.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -123,10 +139,11 @@ class _PeriodBar extends ConsumerWidget {
       TextButton(onPressed: notifier.jumpToToday, child: const Text('Today')),
     ];
 
-    // Below the threshold the two groups stack, and the segments scroll
-    // horizontally so the row cannot overflow again at any width or text scale.
+    // Measured here rather than from the window, so the decision is made
+    // against the width the bar is actually given. Stacked, neither group can
+    // overflow: the segments scroll and the stepper wraps.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth >= wideEnough) {
@@ -140,8 +157,9 @@ class _PeriodBar extends ConsumerWidget {
                 child: periods,
               ),
               const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: stepper,
               ),
             ],

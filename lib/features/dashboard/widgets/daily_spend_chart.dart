@@ -56,33 +56,32 @@ class DailySpendChart extends ConsumerWidget {
           children: [
             // Wrap rather than Row: the title, the "excl. recurring" note and
             // two legend entries fit on one line in a desktop window and are
-            // 84pt too wide on an iPhone. Wrapping reflows them onto a second
-            // line instead of overflowing, at any width or text scale.
+            // 84pt too wide on an iPhone.
+            //
+            // All four are direct children. Grouping the title and the note
+            // into a nested Row would reintroduce the same failure one level
+            // down — a Row cannot wrap, so at a large enough text scale that
+            // pair alone would overflow while the Wrap around it sat with
+            // space to spare.
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 12,
+              spacing: 8,
               runSpacing: 4,
               children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('Daily spending', style: theme.textTheme.titleSmall),
-                    if (excludedFixed) ...[
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message:
-                            'Recurring costs like rent land as one large '
-                            'payment and would flatten the rest of the chart.',
-                        child: Text(
-                          'excl. ${money.format(summary.fixedTotal)} recurring',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
+                Text('Daily spending', style: theme.textTheme.titleSmall),
+                if (excludedFixed)
+                  Tooltip(
+                    message:
+                        'Recurring costs like rent land as one large '
+                        'payment and would flatten the rest of the chart.',
+                    child: Text(
+                      'excl. ${money.format(summary.fixedTotal)} recurring',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
                       ),
-                    ],
-                  ],
-                ),
+                    ),
+                  ),
+                const SizedBox(width: 4),
                 _LegendDot(color: scheme.primary, label: 'per day'),
                 _LegendDot(
                   color: scheme.tertiary,
