@@ -246,18 +246,60 @@ class TransactionRepository {
         ),
       );
 
-  /// Free-text search over merchant and note.
-  Stream<List<SpendRecord>> search(String term, {int limit = 200}) {
-    final pattern = '%${term.trim()}%';
+  /// Free-text search over merchant, note and category name.
+  ///
+  /// Uncapped, like [watchAll]: this backs the History screen, and a limit
+  /// there silently hides older matches once the ledger outgrows it. Search is
+  /// the worse place for that than the plain list, because the user has
+  /// explicitly asked for everything matching.
+  ///
+  /// No `limit` parameter on purpose. One would have no caller today, and its
+  /// only effect would be to let a future one quietly reintroduce the
+  /// truncation this exists to remove.
+  Stream<List<SpendRecord>> search(String term) {
     final q = _joined()
       ..where(
-        _db.transactions.merchant.like(pattern) |
-            _db.transactions.note.like(pattern) |
-            _db.categories.name.like(pattern),
+        _db.transactions.merchant.like(
+              _likePattern(term),
+              escapeChar: _likeEscape,
+            ) |
+            _db.transactions.note.like(
+              _likePattern(term),
+              escapeChar: _likeEscape,
+            ) |
+            _db.categories.name.like(
+              _likePattern(term),
+              escapeChar: _likeEscape,
+            ),
       )
-      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)])
-      ..limit(limit);
+      // The id tiebreaker matches every other list query here. Ordering by
+      // date alone leaves same-day rows in whatever order SQLite happens to
+      // scan them, so the list could reshuffle after any write, and clearing
+      // the search box — which switches this screen to watchAll — could show
+      // the same day's rows in a different order than the search just did.
+      ..orderBy([
+        OrderingTerm.desc(_db.transactions.occurredOn),
+        OrderingTerm.desc(_db.transactions.id),
+      ]);
     return q.watch().map(_map);
+  }
+
+  static const _likeEscape = '\\';
+
+  /// Wraps [term] in wildcards, escaping the ones the user typed.
+  ///
+  /// `%` and `_` are LIKE metacharacters. Interpolated raw, a single `%`
+  /// matches every transaction in the database and `Alb_rt` matches "Albert" —
+  /// a literal search returning rows that do not contain the typed text. That
+  /// was survivable while the query was capped at 200 rows; uncapped it means
+  /// one keystroke can load the entire ledger.
+  static String _likePattern(String term) {
+    final escaped = term
+        .trim()
+        .replaceAll(_likeEscape, '$_likeEscape$_likeEscape')
+        .replaceAll('%', '$_likeEscape%')
+        .replaceAll('_', '${_likeEscape}_');
+    return '%$escaped%';
   }
 
   /// Distinct merchant names, most used first, to power entry autocomplete.
