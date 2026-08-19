@@ -62,7 +62,10 @@ jobs:
       # harness, so plugins are registered and the database is a real file on
       # disk. That is the seam `flutter test` deliberately stubs.
       - name: Run end-to-end tests
-        run: flutter test -d macos integration_test
+        # Expanded, not the default compact reporter: a single updating
+        # line is unreadable in an Actions log, and a CI-only failure is
+        # exactly when the per-test output matters.
+        run: flutter test -d macos integration_test --reporter expanded
 
   build:
     name: Build macOS app
