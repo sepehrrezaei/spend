@@ -23,6 +23,7 @@ import 'package:spend/core/money.dart';
 import 'package:spend/core/providers.dart';
 import 'package:spend/data/backup/auto_backup.dart';
 import 'package:spend/data/db/database.dart';
+import 'package:window_manager/window_manager.dart';
 
 /// A real on-disk database in a throwaway directory.
 ///
@@ -82,6 +83,26 @@ Future<void> pumpSpendApp(
     ),
   );
   await pumpUntil(tester, find.byType(NavigationRail));
+
+  // Undo the app's own no-exit machinery, or a failing test hangs the runner
+  // rather than failing it.
+  //
+  // Pumping SpendApp runs DesktopIntegration.initialise(), which calls
+  // setPreventClose(true) so the real app can live in the menu bar with no
+  // window. Nothing lifts it: DesktopIntegration.dispose() tears down the tray
+  // and the hotkey but leaves preventClose set, and on a failing test the tree
+  // is never unmounted so even that does not run. The app then refuses to
+  // close, `flutter test` waits on a process that will never exit, and CI
+  // reports a twenty-minute `cancelled` instead of a failure with the
+  // assertion in it.
+  //
+  // Registered, not called at the end of the body, precisely so it still runs
+  // when an expectation has already thrown.
+  addTearDown(() async {
+    await windowManager.setPreventClose(false);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
 }
 
 /// Pumps until [finder] matches, or fails at [timeout].
