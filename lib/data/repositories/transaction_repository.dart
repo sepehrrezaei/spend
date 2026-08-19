@@ -66,7 +66,10 @@ class TransactionRepository {
         _db.transactions.occurredOn.isBiggerOrEqualValue(range.start.iso) &
             _db.transactions.occurredOn.isSmallerOrEqualValue(range.end.iso),
       )
-      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)]);
+      ..orderBy([
+        OrderingTerm.desc(_db.transactions.occurredOn),
+        OrderingTerm.desc(_db.transactions.id),
+      ]);
     return _map(await q.get());
   }
 
@@ -257,22 +260,24 @@ class TransactionRepository {
   /// only effect would be to let a future one quietly reintroduce the
   /// truncation this exists to remove.
   Stream<List<SpendRecord>> search(String term) {
+    // An empty term would build the pattern '%%', which matches every row —
+    // so the natural reading of "search for nothing" would be an uncapped
+    // dump of the whole ledger held open by a live subscription. The screen
+    // happens to check before calling, but a guard that only exists at one
+    // call site is not a guard.
+    if (term.trim().isEmpty) return Stream.value(const []);
+
+    // Built once. The three predicates share one pattern, and escaping it
+    // three times to say so was wasted work on every keystroke.
+    final pattern = _likePattern(term);
     final q = _joined()
       ..where(
-        _db.transactions.merchant.like(
-              _likePattern(term),
-              escapeChar: _likeEscape,
-            ) |
-            _db.transactions.note.like(
-              _likePattern(term),
-              escapeChar: _likeEscape,
-            ) |
-            _db.categories.name.like(
-              _likePattern(term),
-              escapeChar: _likeEscape,
-            ),
+        _db.transactions.merchant.like(pattern, escapeChar: _likeEscape) |
+            _db.transactions.note.like(pattern, escapeChar: _likeEscape) |
+            _db.categories.name.like(pattern, escapeChar: _likeEscape),
       )
-      // The id tiebreaker matches every other list query here. Ordering by
+      // The id tiebreaker matches every other list query in this file —
+      // inRange included, which was the one that lacked it. Ordering by
       // date alone leaves same-day rows in whatever order SQLite happens to
       // scan them, so the list could reshuffle after any write, and clearing
       // the search box — which switches this screen to watchAll — could show

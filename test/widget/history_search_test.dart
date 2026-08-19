@@ -36,14 +36,14 @@ void main() {
     }
   }
 
-  late _SearchWatcher watcher;
+  late _ProviderWatcher watcher;
 
   Future<ProviderContainer> pump(WidgetTester tester) async {
     tester.view.physicalSize = const Size(900, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    watcher = _SearchWatcher();
+    watcher = _ProviderWatcher('historySearchResults');
     final container = ProviderContainer(
       overrides: [databaseProvider.overrideWithValue(db)],
       observers: [watcher],
@@ -60,12 +60,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    return container;
-  }
 
-  Future<void> disposeHost(WidgetTester tester) async {
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump(const Duration(milliseconds: 1));
+    // Registered rather than called at the end of each body. A failed expect
+    // aborts the test, and an un-cancelled debounce Timer would then be
+    // reported as "A Timer is still pending" instead of the assertion that
+    // actually failed — hiding the finding behind its own cleanup.
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 1));
+    });
+    return container;
   }
 
   testWidgets('typing does not leave a subscription per prefix', (
@@ -88,7 +92,6 @@ void main() {
       lessThanOrEqualTo(1),
       reason: 'only the term currently being displayed should stay watched',
     );
-    await disposeHost(tester);
   });
 
   testWidgets('a burst of keystrokes runs one query, not one each', (
@@ -109,7 +112,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(watcher.live, 1);
     expect(find.text('Albert Heijn'), findsWidgets);
-    await disposeHost(tester);
   });
 
   testWidgets('clearing the box is immediate, not debounced', (tester) async {
@@ -126,7 +128,70 @@ void main() {
     // than a query, and waiting to show it would just feel broken.
     await tester.pumpAndSettle();
     expect(find.text('Jumbo'), findsWidgets);
-    await disposeHost(tester);
+  });
+
+  testWidgets('results stay on screen while the next term loads', (
+    tester,
+  ) async {
+    await seed(6);
+    await pump(tester);
+
+    await tester.enterText(find.byType(TextField), 'Albert');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(find.text('Albert Heijn'), findsWidgets);
+
+    // Backspace to a different term. A family keyed by term would start a
+    // brand-new provider in AsyncLoading here and replace the whole list with
+    // a spinner — for as long as an uncapped query takes.
+    await tester.enterText(find.byType(TextField), 'Albe');
+    await tester.pump(const Duration(milliseconds: 260));
+
+    expect(
+      find.byType(CircularProgressIndicator),
+      findsNothing,
+      reason: 'previous results should survive the term change',
+    );
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('the clear button appears as soon as there is text', (
+    tester,
+  ) async {
+    await seed(4);
+    await pump(tester);
+
+    await tester.enterText(find.byType(TextField), 'A');
+    // One frame — well inside the 250ms debounce. Tied to the debounced term
+    // the button was absent for that whole window, so there was no way to
+    // clear what had just been typed.
+    await tester.pump();
+    expect(find.byIcon(Icons.clear), findsOneWidget);
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('trailing whitespace does not re-run the query', (tester) async {
+    await seed(4);
+    await pump(tester);
+
+    await tester.enterText(find.byType(TextField), 'Albert');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    final before = watcher.updates;
+    await tester.enterText(find.byType(TextField), 'Albert ');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    // The term is trimmed on the way into the notifier, so a trailing space
+    // leaves it unchanged and the provider is never recomputed. Untrimmed,
+    // this ran the whole uncapped query again for a byte-identical result.
+    expect(
+      watcher.updates,
+      before,
+      reason: 'a whitespace-only edit is the same search',
+    );
+    expect(watcher.live, 1, reason: 'and not a second subscription');
   });
 
   testWidgets('a search with no matches says so', (tester) async {
@@ -139,35 +204,56 @@ void main() {
 
     expect(find.text('Albert Heijn'), findsNothing);
     expect(tester.takeException(), isNull);
-    await disposeHost(tester);
   });
 }
 
-/// Counts live search-provider instances by observing the container.
+/// Counts live instances of one specific provider.
 ///
-/// `getAllProviderElements` is not public API in Riverpod 3, and a leak is
-/// about lifecycle rather than a snapshot anyway: this counts what was created
-/// against what was disposed, which is the thing that actually went wrong.
-base class _SearchWatcher extends ProviderObserver {
-  final _alive = <String>{};
+/// Matches on the provider's own identity rather than on "a family with a
+/// String argument": that heuristic only worked while no other String-keyed
+/// family existed, and because it stored terms rather than instances, two
+/// providers sharing an argument would have cancelled each other out and hidden
+/// a genuine leak.
+///
+/// Counting creates against disposes rather than snapshotting is deliberate —
+/// a leak is a lifecycle property, not a state you can observe at one instant.
+base class _ProviderWatcher extends ProviderObserver {
+  _ProviderWatcher(this._label);
 
-  /// Search providers are the family-scoped ones taking a String argument.
-  String? _term(ProviderObserverContext context) {
-    final arg = context.provider.argument;
-    return arg is String ? arg : null;
-  }
+  /// Substring identifying the provider under test, matched against
+  /// `context.provider.toString()`.
+  final String _label;
 
-  int get live => _alive.length;
+  int _created = 0;
+  int _disposed = 0;
+  int _updates = 0;
+
+  bool _matches(ProviderObserverContext context) =>
+      context.provider.toString().contains(_label);
+
+  /// Instances created and not yet disposed.
+  int get live => _created - _disposed;
+
+  /// How many times the provider has re-emitted, which is what a term change
+  /// costs: one more run of the query.
+  int get updates => _updates;
 
   @override
   void didAddProvider(ProviderObserverContext context, Object? value) {
-    final term = _term(context);
-    if (term != null) _alive.add(term);
+    if (_matches(context)) _created++;
+  }
+
+  @override
+  void didUpdateProvider(
+    ProviderObserverContext context,
+    Object? previous,
+    Object? next,
+  ) {
+    if (_matches(context)) _updates++;
   }
 
   @override
   void didDisposeProvider(ProviderObserverContext context) {
-    final term = _term(context);
-    if (term != null) _alive.remove(term);
+    if (_matches(context)) _disposed++;
   }
 }
