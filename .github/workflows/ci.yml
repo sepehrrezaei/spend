@@ -16,6 +16,7 @@ jobs:
     # A macOS runner, because this is a macOS app and the desktop build is
     # part of what CI is verifying.
     runs-on: macos-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -38,10 +39,36 @@ jobs:
       - name: Test
         run: flutter test
 
+  e2e:
+    name: End-to-end smoke
+    runs-on: macos-latest
+    needs: test
+    # A hang here would otherwise burn the six-hour default. The suite runs in
+    # a couple of minutes; anything past twenty means it is stuck, not slow.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.x
+          cache: true
+
+      - run: flutter pub get
+
+      # Runs inside a real macOS app process rather than the headless test
+      # harness, so plugins are registered and the database is a real file on
+      # disk. That is the seam `flutter test` deliberately stubs.
+      - name: Run end-to-end tests
+        run: flutter test -d macos integration_test
+
   build:
     name: Build macOS app
     runs-on: macos-latest
     needs: test
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
