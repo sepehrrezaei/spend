@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,10 +21,37 @@ class TransactionsScreen extends ConsumerStatefulWidget {
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   final _searchController = TextEditingController();
-  String _query = '';
+  Timer? _debounce;
+
+  /// Long enough to swallow a typing burst, short enough not to feel laggy.
+  ///
+  /// Without it every keystroke builds a fresh uncapped query: typing a
+  /// twelve-character merchant name ran twelve full-table scans, each mapping
+  /// its whole result set into SpendRecords on the way back.
+  static const _debounceDelay = Duration(milliseconds: 250);
+
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    // An empty box is the unfiltered list rather than a query, so there is
+    // nothing to rate-limit and waiting would just feel unresponsive.
+    if (value.trim().isEmpty) {
+      ref.read(_searchTermProvider.notifier).set('');
+      return;
+    }
+    _debounce = Timer(_debounceDelay, () {
+      if (mounted) ref.read(_searchTermProvider.notifier).set(value);
+    });
+  }
+
+  void _clear() {
+    _debounce?.cancel();
+    _searchController.clear();
+    ref.read(_searchTermProvider.notifier).set('');
+  }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -30,11 +59,12 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(transactionRepositoryProvider);
+    final term = ref.watch(_searchTermProvider);
     // The whole ledger, not the capped "recent" list: this screen is the only
     // place older entries can be found, so a limit here would hide them.
-    final stream = _query.trim().isEmpty
+    final stream = term.isEmpty
         ? ref.watch(allTransactionsProvider)
-        : ref.watch(_searchProvider(_query));
+        : ref.watch(_searchResultsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -47,20 +77,24 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: TextField(
                 controller: _searchController,
-                onChanged: (v) => setState(() => _query = v),
+                onChanged: _onQueryChanged,
                 decoration: InputDecoration(
                   hintText: 'Search merchant, note or category',
                   prefixIcon: const Icon(Icons.search, size: 20),
                   isDense: true,
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() => _query = '');
-                          },
-                        ),
+                  // Driven by the field's own text, not by the debounced
+                  // term: tied to the term the button only appeared 250ms
+                  // after the user started typing, so for that window there
+                  // was no way to clear what they had typed.
+                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _searchController,
+                    builder: (context, value, _) => value.text.isEmpty
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: _clear,
+                          ),
+                  ),
                 ),
               ),
             ),
@@ -68,11 +102,18 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
         ),
       ),
       body: stream.when(
+        // Belt and braces, and worth being precise about: what actually
+        // keeps the list on screen across a term change is the provider shape
+        // above, not this flag — removing the flag changes nothing the tests
+        // can observe. It covers the case they cannot reproduce, where the
+        // query is slow enough to span frames, which on an in-memory database
+        // never happens and on a large ledger is exactly when it matters.
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Could not load history: $e')),
         data: (records) {
           if (records.isEmpty) {
-            return _EmptyHistory(searching: _query.trim().isNotEmpty);
+            return _EmptyHistory(searching: term.isNotEmpty);
           }
           return ContentWidth(
             child: _GroupedList(
@@ -102,11 +143,47 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
   }
 }
 
-/// Search results for a term. Family-scoped so each distinct query gets its
-/// own subscription and disposes when no longer watched.
-final _searchProvider = StreamProvider.family<List<SpendRecord>, String>(
-  (ref, term) => ref.watch(transactionRepositoryProvider).search(term),
+/// The term being searched, already trimmed and debounced by the screen.
+class _SearchTerm extends Notifier<String> {
+  @override
+  String build() => '';
+
+  /// Trimmed on the way in, so " albert" and "albert " are the same search
+  /// rather than two queries with identical results.
+  void set(String value) => state = value.trim();
+}
+
+final _searchTermProvider = NotifierProvider<_SearchTerm, String>(
+  _SearchTerm.new,
 );
+
+/// Results for [_searchTermProvider].
+///
+/// Deliberately *not* a family keyed by the term. Two reasons, and the second
+/// is why the obvious shape is the wrong one:
+///
+/// 1. `StreamProvider.family` is not auto-dispose in Riverpod 3 —
+///    `StreamProviderFamily` declares `isAutoDispose = false` — so a family
+///    keyed by term leaves one live drift subscription per prefix the user
+///    typed, each re-running on every write. Bounded to 200 rows that was
+///    survivable; uncapped it is not.
+/// 2. Adding `autoDispose` fixes the leak and introduces a worse problem: a
+///    new key means a brand-new provider, which starts in `AsyncLoading`, so
+///    every settled term replaced the whole list with a spinner — for the
+///    duration of an uncapped query, which is longest on exactly the large
+///    ledgers this screen exists to serve.
+///
+/// One provider watching the term instead *recomputes* on change, and a
+/// recompute keeps the previous value, so the results stay on screen while the
+/// next query runs. Measured: with a family, the frame on which the debounce
+/// fires renders a spinner and no rows; with this shape it never does.
+final _searchResultsProvider = StreamProvider.autoDispose<List<SpendRecord>>((
+  ref,
+) {
+  final term = ref.watch(_searchTermProvider);
+  if (term.isEmpty) return const Stream<List<SpendRecord>>.empty();
+  return ref.watch(transactionRepositoryProvider).search(term);
+}, name: 'historySearchResults');
 
 /// Transactions under sticky per-day headers carrying that day's total.
 class _GroupedList extends ConsumerWidget {

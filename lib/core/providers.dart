@@ -288,8 +288,16 @@ final periodSummaryProvider = Provider<AsyncValue<PeriodSummary>>((ref) {
 /// Separate from [periodTransactionsProvider] because budgets need their own
 /// windows — a yearly limit is judged over a year regardless of what the
 /// dashboard happens to be showing.
-final transactionsInRangeProvider =
-    StreamProvider.family<List<SpendRecord>, DateRange>(
+///
+/// `autoDispose` because `StreamProvider.family` is not auto-dispose in
+/// Riverpod 3 (`StreamProviderFamily` declares `isAutoDispose = false`), and
+/// the key here changes on its own: the range is derived from `Day.today()`,
+/// the active budgets and the week start. A date rollover on a machine left
+/// open overnight, a budget edit, or a week-start change each stranded the
+/// previous range with a live drift subscription re-running on every write,
+/// for the lifetime of the process.
+final transactionsInRangeProvider = StreamProvider.autoDispose
+    .family<List<SpendRecord>, DateRange>(
       (ref, range) =>
           ref.watch(transactionRepositoryProvider).watchInRange(range),
     );

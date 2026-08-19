@@ -66,7 +66,10 @@ class TransactionRepository {
         _db.transactions.occurredOn.isBiggerOrEqualValue(range.start.iso) &
             _db.transactions.occurredOn.isSmallerOrEqualValue(range.end.iso),
       )
-      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)]);
+      ..orderBy([
+        OrderingTerm.desc(_db.transactions.occurredOn),
+        OrderingTerm.desc(_db.transactions.id),
+      ]);
     return _map(await q.get());
   }
 
@@ -246,18 +249,62 @@ class TransactionRepository {
         ),
       );
 
-  /// Free-text search over merchant and note.
-  Stream<List<SpendRecord>> search(String term, {int limit = 200}) {
-    final pattern = '%${term.trim()}%';
+  /// Free-text search over merchant, note and category name.
+  ///
+  /// Uncapped, like [watchAll]: this backs the History screen, and a limit
+  /// there silently hides older matches once the ledger outgrows it. Search is
+  /// the worse place for that than the plain list, because the user has
+  /// explicitly asked for everything matching.
+  ///
+  /// No `limit` parameter on purpose. One would have no caller today, and its
+  /// only effect would be to let a future one quietly reintroduce the
+  /// truncation this exists to remove.
+  Stream<List<SpendRecord>> search(String term) {
+    // An empty term would build the pattern '%%', which matches every row —
+    // so the natural reading of "search for nothing" would be an uncapped
+    // dump of the whole ledger held open by a live subscription. The screen
+    // happens to check before calling, but a guard that only exists at one
+    // call site is not a guard.
+    if (term.trim().isEmpty) return Stream.value(const []);
+
+    // Built once. The three predicates share one pattern, and escaping it
+    // three times to say so was wasted work on every keystroke.
+    final pattern = _likePattern(term);
     final q = _joined()
       ..where(
-        _db.transactions.merchant.like(pattern) |
-            _db.transactions.note.like(pattern) |
-            _db.categories.name.like(pattern),
+        _db.transactions.merchant.like(pattern, escapeChar: _likeEscape) |
+            _db.transactions.note.like(pattern, escapeChar: _likeEscape) |
+            _db.categories.name.like(pattern, escapeChar: _likeEscape),
       )
-      ..orderBy([OrderingTerm.desc(_db.transactions.occurredOn)])
-      ..limit(limit);
+      // The id tiebreaker matches every other list query in this file —
+      // inRange included, which was the one that lacked it. Ordering by
+      // date alone leaves same-day rows in whatever order SQLite happens to
+      // scan them, so the list could reshuffle after any write, and clearing
+      // the search box — which switches this screen to watchAll — could show
+      // the same day's rows in a different order than the search just did.
+      ..orderBy([
+        OrderingTerm.desc(_db.transactions.occurredOn),
+        OrderingTerm.desc(_db.transactions.id),
+      ]);
     return q.watch().map(_map);
+  }
+
+  static const _likeEscape = '\\';
+
+  /// Wraps [term] in wildcards, escaping the ones the user typed.
+  ///
+  /// `%` and `_` are LIKE metacharacters. Interpolated raw, a single `%`
+  /// matches every transaction in the database and `Alb_rt` matches "Albert" —
+  /// a literal search returning rows that do not contain the typed text. That
+  /// was survivable while the query was capped at 200 rows; uncapped it means
+  /// one keystroke can load the entire ledger.
+  static String _likePattern(String term) {
+    final escaped = term
+        .trim()
+        .replaceAll(_likeEscape, '$_likeEscape$_likeEscape')
+        .replaceAll('%', '$_likeEscape%')
+        .replaceAll('_', '${_likeEscape}_');
+    return '%$escaped%';
   }
 
   /// Distinct merchant names, most used first, to power entry autocomplete.
