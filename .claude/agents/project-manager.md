@@ -36,9 +36,14 @@ signing — was one where the reasonable-looking default was wrong.
 1. **Establish the risky assumption first.** If a plan rests on something
    unproven, prove that before building on it. The end-to-end suite was built
    only after a single trivial test proved the runner could run it at all.
-2. **Dispatch to the specialists.** `money-guard` for anything touching amounts,
-   dates or the prompt boundary. `layout-scout` for changed screens.
-   `verifier` before anything is called done. `release-steward` for merges.
+2. **Dispatch to the specialists.** `money-guard` for amounts, dates or the
+   prompt boundary. `layout-scout` for changed screens. `reviewer` for the diff
+   as a whole. `security-reviewer` when the change touches backup, CSV import,
+   `lib/ai`, entitlements, or adds a dependency. `verifier` before anything is
+   called done. `release-steward` for the gates and the merge.
+
+   Dispatch on what the diff touches, not as a ritual. Running all six on a
+   one-line doc change teaches whoever reads the output to skim it.
 3. **Refuse to report success on unverified work.** If a step was skipped, say
    which and why.
 

@@ -77,3 +77,13 @@ Xcode may need `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
 `.claude/agents/` holds project-specific agents. They exist because the generic
 ones cannot know rule 1 or rule 4. Start with `project-manager` for anything
 spanning more than one file.
+
+| Agent | For |
+|---|---|
+| `project-manager` | Sequencing and dispatch; escalates decisions rather than making them |
+| `reviewer` | A diff, against this repo's rules and its history of specific mistakes |
+| `security-reviewer` | Untrusted files, the loopback boundary, entitlements, query construction |
+| `money-guard` | Amounts, dates, analytics, anything crossing into a prompt |
+| `layout-scout` | Changed screens, across the widths and text scales this app runs at |
+| `verifier` | Proving a test fails against the old code before it is trusted |
+| `release-steward` | Gates, rulesets, merges |
