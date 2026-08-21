@@ -9,7 +9,7 @@ No account, no server, no telemetry. Your ledger is a SQLite file on your own di
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
-[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-237%20passing-brightgreen)](#testing)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 <img src="docs/screenshots/overview.png" width="900" alt="The overview screen">
@@ -335,7 +335,7 @@ Two deliberate choices worth knowing:
 flutter test
 ```
 
-**177 tests**, concentrated where mistakes would be invisible in the UI:
+**237 tests**, concentrated where mistakes would be invisible in the UI:
 
 | Area | Covers |
 |---|---|
@@ -343,6 +343,23 @@ flutter test
 | `test/domain` | Period aggregation, partial-period comparison, budget pacing, insight rules |
 | `test/data` | Schema round-trips, foreign-key enforcement, backup restore, CSV detection |
 | `test/ai` | Tool argument repair, category resolution, refusing ambiguous matches |
+| `test/widget` | Layout at phone and desktop widths, dialogs, the search box |
+| `integration_test` | The real app on a real database file — see below |
+
+Eight of them run end to end, in a real macOS app process rather than the
+headless test harness:
+
+```bash
+flutter test -d macos integration_test
+```
+
+That is a different kind of coverage rather than more of the same. Every test
+under `test/` runs with no plugins registered, so the database is always
+in-memory and `path_provider` is stubbed. The end-to-end suite gets a real
+SQLite file created by a real migration, real plugin channels, and real bytes on
+disk — which is how a backup can be written, the ledger wiped, and the file
+restored as an actual round trip. A stub Ollama on loopback covers the AI paths
+without a model.
 
 A few that exist because the bug actually happened:
 

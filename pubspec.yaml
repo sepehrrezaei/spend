@@ -44,6 +44,16 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  # Runs tests inside a real macOS app process, so plugins are registered and
+  # the database is a real file. `flutter test` registers no plugins, which is
+  # why every existing test stubs path_provider and uses an in-memory database.
+  integration_test:
+    sdk: flutter
+
+  # For the fake save/open panel. The app depends on file_selector; this is its
+  # platform interface, which exposes the `instance` setter a fake needs.
+  file_selector_platform_interface: ^2.7.0
   flutter_lints: ^6.0.0
 
   # Drift generates the typed database code; run `dart run build_runner build`
