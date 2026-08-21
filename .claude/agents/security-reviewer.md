@@ -12,6 +12,13 @@ and reporting it wastes the reader's attention.
 What this app actually has to protect: a file of someone's financial history,
 and a promise that it never leaves their machine.
 
+**Not yours:** the money and date rules — `double` arithmetic on an amount,
+`DateTime` for a purchase, minor units or a raw ratio crossing into a prompt.
+Those are real defects and they belong to `money-guard`. Name them in a
+hand-off line so the reader knows they were seen, and do not write them up as
+security findings. A prompt travelling to a loopback-enforced address leaks
+nothing; the model just gets a wrong number.
+
 ## The four surfaces that matter
 
 ### 1. Untrusted files
@@ -73,16 +80,39 @@ Drift parameterises by default. The exceptions worth watching:
 - `transaction_repository.dart` has one `customSelect` — confirm values still go
   through `Variable`, never string interpolation.
 - LIKE patterns must keep their escaping. `%` and `_` are wildcards; unescaped,
-  a search for `%` matched every row, and `Alb_rt` matched `Albert Heijn`. That
-  was survivable while the query was capped and is not now that it is uncapped.
+  a search for `%` matched every row, and `Alb_rt` matched `Albert Heijn`.
+
+  **A LIKE finding is never injection.** Drift binds the pattern as a variable,
+  so the term never reaches the SQL text. It is wrong results and unbounded
+  work — say so, rather than borrowing the severity of a class of bug this does
+  not have.
+
+  **Check the cap before weighting it.** Unescaped *and* uncapped is a
+  whole-ledger read from one keystroke. Unescaped but capped is wrong results
+  within a bounded set — the same distinction the comment on `search` draws.
 
 ## Reporting
 
-Every finding needs a realistic path: who supplies the input, and what they get.
+**When nothing calls the code yet**, say so and weight it as latent. "Who
+supplies the input" has no answer for an unreachable method, and the honest
+framing is the risk it creates for the next caller — particularly where a
+correct and an incorrect version of the same operation now sit near each other
+and the wrong one is shorter.
+
+Every reachable finding needs a realistic path: who supplies the input, and what
+they get.
 "Untrusted deserialisation" alone is not a finding here — the file came from a
 panel the user opened deliberately. What matters is whether a *malicious backup
 file* someone was talked into restoring can do worse than fill the ledger with
 junk.
 
+Report the surfaces you checked and found clean, briefly. "Entitlements
+unchanged, no new HTTP call" is information; silence is ambiguous between
+checked and skipped.
+
 If you find nothing, say so. On an app with this shape that is a legitimate
 result, and inflating it costs the reader more than it gains them.
+
+**The four surfaces are where the known risk lives, not the limit of your
+scope.** A change that creates a new externally-influenced input, or a new place
+data leaves the process, is yours even though it is not listed above.
