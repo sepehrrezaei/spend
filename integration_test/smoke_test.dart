@@ -10,6 +10,7 @@
 /// the arithmetic and the boundaries.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
@@ -242,13 +243,7 @@ void main() {
     // the only part of the app no test could reach — its ProviderScope was
     // const, so a temporary database could not be injected and every test had
     // to go around it.
-    await bootstrap(
-      overrides: [databaseProvider.overrideWithValue(db)],
-      // Short on purpose. The window is already up from the test harness, so
-      // whatever this does it must not stop the app starting — which is the
-      // whole point of the change.
-      windowSetupTimeout: const Duration(milliseconds: 1),
-    );
+    await bootstrap(overrides: [databaseProvider.overrideWithValue(db)]);
 
     await pumpUntil(tester, find.byType(NavigationRail));
     expect(find.text('Overview'), findsWidgets);
@@ -256,6 +251,41 @@ void main() {
 
     // And it used the injected database, not the developer's real ledger.
     expect(await db.select(db.categories).get(), hasLength(11));
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('a window that never becomes ready does not stop the app', (
+    tester,
+  ) async {
+    // The failure this whole change exists to prevent: three window_manager
+    // calls awaited before runApp with nothing bounding them, so a Mac whose
+    // window server is slow or absent at login gets a process that is running
+    // and invisible.
+    //
+    // The setup here never completes, so the timeout is the only way out —
+    // deterministic rather than racing a short timeout against the real plugin
+    // calls, which on a fast host can finish first and skip the path entirely.
+    final neverReady = Completer<void>();
+    addTearDown(() => neverReady.complete());
+
+    final started = DateTime.now();
+    await bootstrap(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      windowSetup: () => neverReady.future,
+      windowSetupTimeout: const Duration(milliseconds: 200),
+    );
+
+    expect(
+      DateTime.now().difference(started),
+      greaterThanOrEqualTo(const Duration(milliseconds: 200)),
+      reason: 'the timeout should be what released it, not a fast return',
+    );
+
+    await pumpUntil(tester, find.byType(NavigationRail));
+    expect(find.text('Overview'), findsWidgets);
+    expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 1));

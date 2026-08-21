@@ -89,6 +89,15 @@ class DesktopIntegration with TrayListener, WindowListener {
 
   Future<void> _registerHotKey() async {
     try {
+      // Immediately before registering, not during bootstrap. Global hotkeys
+      // are held by the OS, so a debug session killed mid-run leaves the
+      // shortcut claimed and the next launch unable to register it — but doing
+      // the cleanup in main() put it inside a sequence that can be abandoned
+      // on timeout and then complete *after* this registration, unregistering
+      // the shortcut it was meant to make room for. Adjacent to the register
+      // call, the two cannot be separated in time.
+      await hotKeyManager.unregisterAll();
+
       await hotKeyManager.register(
         quickAddHotKey,
         keyDownHandler: (_) => onQuickAdd(),
