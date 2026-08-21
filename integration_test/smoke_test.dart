@@ -23,6 +23,8 @@ import 'package:spend/core/money.dart';
 import 'package:spend/core/providers.dart';
 import 'package:spend/data/db/database.dart';
 
+import 'package:spend/main.dart';
+
 import 'support/harness.dart';
 
 void main() {
@@ -232,5 +234,30 @@ void main() {
       find.textContaining('ahead of its budget'),
       reason: 'the narration to stream in from the stub model',
     );
+  });
+
+  testWidgets('the real entry point starts the app', (tester) async {
+    // The one thing none of the other tests do: call bootstrap() rather than
+    // pumping SpendApp directly. Before this was possible the entry point was
+    // the only part of the app no test could reach — its ProviderScope was
+    // const, so a temporary database could not be injected and every test had
+    // to go around it.
+    await bootstrap(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      // Short on purpose. The window is already up from the test harness, so
+      // whatever this does it must not stop the app starting — which is the
+      // whole point of the change.
+      windowSetupTimeout: const Duration(milliseconds: 1),
+    );
+
+    await pumpUntil(tester, find.byType(NavigationRail));
+    expect(find.text('Overview'), findsWidgets);
+    expect(tester.takeException(), isNull);
+
+    // And it used the injected database, not the developer's real ledger.
+    expect(await db.select(db.categories).get(), hasLength(11));
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 1));
   });
 }

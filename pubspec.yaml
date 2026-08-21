@@ -14,6 +14,11 @@ dependencies:
 
   # State and navigation
   flutter_riverpod: ^3.3.2
+
+  # Direct because bootstrap() names `Override` in its signature, and that type
+  # lives in riverpod rather than flutter_riverpod. Already present as a
+  # transitive dependency; this only makes the reference honest.
+  riverpod: ^3.3.2
   go_router: ^17.3.0
 
   # Storage
