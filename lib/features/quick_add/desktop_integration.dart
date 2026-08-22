@@ -89,6 +89,15 @@ class DesktopIntegration with TrayListener, WindowListener {
 
   Future<void> _registerHotKey() async {
     try {
+      // Immediately before registering, not during bootstrap. Global hotkeys
+      // are held by the OS, so a debug session killed mid-run leaves the
+      // shortcut claimed and the next launch unable to register it — but doing
+      // the cleanup in main() put it inside a sequence that can be abandoned
+      // on timeout and then complete *after* this registration, unregistering
+      // the shortcut it was meant to make room for. Adjacent to the register
+      // call, the two cannot be separated in time.
+      await hotKeyManager.unregisterAll();
+
       await hotKeyManager.register(
         quickAddHotKey,
         keyDownHandler: (_) => onQuickAdd(),
@@ -138,16 +147,28 @@ class DesktopIntegration with TrayListener, WindowListener {
   /// `macos/Runner/MainFlutterWindow.swift`.
   static const _lifecycle = MethodChannel('spend/lifecycle');
 
-  Future<void> _quit() async {
-    await dispose();
-    await windowManager.setPreventClose(false);
-    await windowManager.destroy();
+  /// Ends the process.
+  ///
+  /// Public and documented because this app cannot be closed the ordinary way
+  /// and there is no other route to a clean exit: `AppDelegate` returns false
+  /// from `applicationShouldTerminateAfterLastWindowClosed` and
+  /// [initialise] sets `preventClose`, both so the app can live in the menu bar
+  /// with no window. Anything driving the app — the tray item, a script, a test
+  /// harness — needs this rather than closing the window and hoping.
+  ///
+  /// Lifts `preventClose` first, so a caller that only wants the window gone
+  /// is not fighting it, then asks AppKit to quit so the normal shutdown path
+  /// runs rather than the rug being pulled from under the engine.
+  static Future<void> terminate() async {
+    if (isDesktop) {
+      await windowManager.setPreventClose(false);
+      await windowManager.destroy();
+    }
 
     // Destroying the window is not enough. The app deliberately survives its
-    // last window so it can live in the menu bar, so without an explicit
-    // terminate "Quit Spend" leaves a headless process running with no window,
-    // no tray icon and no way back to it — the shortcut is gone and the only
-    // remedy is Activity Monitor. Ask AppKit to quit for real.
+    // last window, so without an explicit terminate "Quit Spend" leaves a
+    // headless process running with no window, no tray icon and no way back to
+    // it — the shortcut is gone and the only remedy is Activity Monitor.
     try {
       await _lifecycle.invokeMethod<void>('terminate');
     } on Object catch (e) {
@@ -156,6 +177,11 @@ class DesktopIntegration with TrayListener, WindowListener {
       debugPrint('Falling back to exit(): $e');
       exit(0);
     }
+  }
+
+  Future<void> _quit() async {
+    await dispose();
+    await terminate();
   }
 
   // ----------------------------------------------------------- window events
