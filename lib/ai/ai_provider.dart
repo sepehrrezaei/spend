@@ -7,6 +7,8 @@
 /// Insights tab would still show every figure it shows today.
 library;
 
+import 'package:meta/meta.dart';
+
 import '../domain/analytics/insight_rules.dart';
 
 /// A narration failure worth telling the user about.
@@ -80,4 +82,38 @@ class NullAiProvider implements AiProvider {
 
   @override
   void dispose() {}
+}
+
+/// Progress of a model download.
+///
+/// Ollama reports bytes per layer rather than for the whole pull, so [fraction]
+/// is the progress of the layer currently downloading, not of everything left
+/// to do. A pull visibly restarts its bar several times; that is the server's
+/// shape, and pretending otherwise would mean inventing a total.
+@immutable
+class PullProgress {
+  /// The server's own words — "pulling manifest", "verifying sha256 digest".
+  final String status;
+
+  final int completedBytes;
+  final int totalBytes;
+
+  /// Set when the pull failed. The stream ends after this.
+  final String? error;
+
+  const PullProgress({
+    required this.status,
+    this.completedBytes = 0,
+    this.totalBytes = 0,
+    this.error,
+  });
+
+  bool get isDone => status == 'success';
+  bool get hasFailed => error != null;
+
+  /// Null when the server has not said how big this layer is — during manifest
+  /// and verification steps there is nothing to measure, and a determinate bar
+  /// frozen at zero reads as broken rather than as busy.
+  double? get fraction =>
+      totalBytes > 0 ? (completedBytes / totalBytes).clamp(0.0, 1.0) : null;
 }

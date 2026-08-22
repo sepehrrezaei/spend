@@ -12,6 +12,8 @@ import '../core/providers.dart';
 import '../domain/analytics/analytics_engine.dart';
 import '../domain/analytics/insight_rules.dart';
 import '../domain/entities/spend_record.dart';
+import 'package:meta/meta.dart';
+
 import 'ai_provider.dart';
 import 'ollama_provider.dart';
 
@@ -204,3 +206,42 @@ class Narration extends Notifier<NarrationState> {
 final narrationProvider = NotifierProvider<Narration, NarrationState>(
   Narration.new,
 );
+
+/// Models offered in Settings, with the reason each is here.
+///
+/// A bare list of names tells a user nothing about which to pick, and picking
+/// wrong on a 16GB machine means a model that swaps rather than one that is
+/// slow. Sizes are the download, not the memory footprint.
+@immutable
+class SuggestedModel {
+  final String name;
+  final String size;
+  final String note;
+  final bool recommended;
+
+  const SuggestedModel({
+    required this.name,
+    required this.size,
+    required this.note,
+    this.recommended = false,
+  });
+
+  static const catalogue = <SuggestedModel>[
+    SuggestedModel(
+      name: OllamaProvider.defaultModel,
+      size: '~2 GB',
+      note: 'Comfortable on 16GB. Enough for the narration this app asks for.',
+      recommended: true,
+    ),
+    SuggestedModel(
+      name: 'llama3.2:1b',
+      size: '~1.3 GB',
+      note: 'Faster and lighter. Blunter prose, same figures.',
+    ),
+    SuggestedModel(
+      name: 'qwen2.5:7b',
+      size: '~4.7 GB',
+      note: 'Better phrasing, noticeably slower on CPU.',
+    ),
+  ];
+}
