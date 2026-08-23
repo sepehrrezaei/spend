@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../ai/ai_providers.dart';
+import '../../ai/ai_provider.dart';
 import '../../ai/local_endpoint.dart';
 import '../../ai/ollama_provider.dart';
 import '../../core/providers.dart';
@@ -19,6 +21,19 @@ class AiSection extends ConsumerStatefulWidget {
 }
 
 class _AiSectionState extends ConsumerState<AiSection> {
+  /// The download in flight, if any. Held here rather than in a provider
+  /// because it belongs to this screen being open — navigating away should
+  /// cancel it, not leave bytes arriving into nothing.
+  StreamSubscription<PullProgress>? _pull;
+  PullProgress? _progress;
+  String? _pulling;
+
+  /// Whether the download picker is open while a model is already
+  /// installed. Closed by default there: the common case is someone who
+  /// is set up and does not need it. When nothing is installed the panel
+  /// is shown outright instead, because then it is the whole point of
+  /// the screen.
+  bool _showPull = false;
   late final TextEditingController _host;
   String? _hostError;
 
@@ -30,8 +45,75 @@ class _AiSectionState extends ConsumerState<AiSection> {
 
   @override
   void dispose() {
+    _pull?.cancel();
     _host.dispose();
     super.dispose();
+  }
+
+  void _startPull(String name) {
+    _pull?.cancel();
+    setState(() {
+      _pulling = name;
+      _progress = const PullProgress(status: 'starting');
+    });
+
+    final provider = ref.read(aiProviderProvider);
+    if (provider is! OllamaProvider) {
+      // Only Ollama can pull. No route in the UI reaches this today — the
+      // panel lives inside `if (enabled)`, and switching Local AI off is what
+      // swaps in NullAiProvider. But a bare `return` here would leave the
+      // panel showing "Downloading…" against a stream that was never started,
+      // with Cancel as the only way out and no reason given.
+      setState(() {
+        _pulling = null;
+        _progress = const PullProgress(
+          status: 'failed',
+          error: 'Downloads need Local AI switched on.',
+        );
+      });
+      return;
+    }
+
+    _pull = provider
+        .pullModel(name)
+        .listen(
+          (p) {
+            if (!mounted) return;
+            setState(() => _progress = p);
+            // Re-probe on success so the picker and the status line pick up the
+            // new model without the user pressing Test.
+            if (p.isDone) {
+              ref.invalidate(aiAvailabilityProvider);
+              _finishPull();
+            }
+            if (p.hasFailed) _finishPull(keepMessage: true);
+          },
+          onError: (Object e) {
+            if (!mounted) return;
+            setState(
+              () => _progress = PullProgress(status: 'failed', error: '$e'),
+            );
+            _finishPull(keepMessage: true);
+          },
+        );
+  }
+
+  void _finishPull({bool keepMessage = false}) {
+    _pull?.cancel();
+    _pull = null;
+    setState(() {
+      _pulling = null;
+      if (!keepMessage) _progress = null;
+    });
+  }
+
+  void _cancelPull() {
+    _pull?.cancel();
+    _pull = null;
+    setState(() {
+      _pulling = null;
+      _progress = null;
+    });
   }
 
   @override
@@ -124,42 +206,93 @@ class _AiSectionState extends ConsumerState<AiSection> {
                       availability.when(
                         loading: () => const LinearProgressIndicator(),
                         error: (e, _) => _Status(ok: false, message: '$e'),
-                        data: (a) => Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _Status(
-                              ok: a.hasModel,
-                              message: a.hasModel
-                                  ? 'Connected · ${a.models.length} '
-                                        'model${a.models.length == 1 ? "" : "s"} '
-                                        'installed'
-                                  : a.reason ?? 'Not reachable',
-                            ),
-                            if (a.models.isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              DropdownButtonFormField<String>(
-                                initialValue: a.models.contains(model)
-                                    ? model
-                                    : a.models.first,
-                                decoration: const InputDecoration(
-                                  labelText: 'Model',
-                                  isDense: true,
-                                ),
-                                items: [
-                                  for (final m in a.models)
-                                    DropdownMenuItem(value: m, child: Text(m)),
-                                ],
-                                onChanged: (v) => v == null
-                                    ? null
-                                    : db.setSetting(SettingKeys.ollamaModel, v),
+                        data: (a) {
+                          final pullPanel = _PullPanel(
+                            busyWith: _pulling,
+                            progress: _progress,
+                            installed: a.models.toSet(),
+                            onPull: _startPull,
+                            onCancel: _cancelPull,
+                          );
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _Status(
+                                ok: a.hasModel,
+                                message: a.hasModel
+                                    ? 'Connected · ${a.models.length} '
+                                          'model${a.models.length == 1 ? "" : "s"} '
+                                          'installed'
+                                    : a.reason ?? 'Not reachable',
                               ),
+                              if (!a.hasModel && _hostError == null) ...[
+                                const SizedBox(height: 10),
+                                pullPanel,
+                              ],
+                              if (a.models.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                DropdownButtonFormField<String>(
+                                  initialValue: a.models.contains(model)
+                                      ? model
+                                      : a.models.first,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Model',
+                                    isDense: true,
+                                  ),
+                                  items: [
+                                    for (final m in a.models)
+                                      DropdownMenuItem(
+                                        value: m,
+                                        child: Text(m),
+                                      ),
+                                  ],
+                                  onChanged: (v) => v == null
+                                      ? null
+                                      : db.setSetting(
+                                          SettingKeys.ollamaModel,
+                                          v,
+                                        ),
+                                ),
+                              ],
+                              // Reachable, something installed: the picker is
+                              // still worth reaching. Someone running the 1b
+                              // model has no other way to discover that 3b is
+                              // the one this app is tuned for, and the panel
+                              // used to be unreachable the moment any model
+                              // existed. Forced open while a pull is running so
+                              // it cannot be collapsed out from under itself.
+                              if (a.hasModel && _hostError == null) ...[
+                                const SizedBox(height: 4),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: _pulling != null
+                                        ? null
+                                        : () => setState(
+                                            () => _showPull = !_showPull,
+                                          ),
+                                    icon: Icon(
+                                      _showPull
+                                          ? Icons.expand_less
+                                          : Icons.expand_more,
+                                      size: 16,
+                                    ),
+                                    label: Text(
+                                      _showPull
+                                          ? 'Hide downloads'
+                                          : 'Download another model',
+                                    ),
+                                  ),
+                                ),
+                                if (_showPull || _pulling != null) pullPanel,
+                              ],
+                              if (!a.reachable) ...[
+                                const SizedBox(height: 10),
+                                const _StartHint(),
+                              ],
                             ],
-                            if (!a.reachable) ...[
-                              const SizedBox(height: 10),
-                              const _StartHint(),
-                            ],
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -224,15 +357,16 @@ class _StartHint extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'To switch it on, from the project folder:',
+            'Starting Ollama is the one step that has to happen outside the '
+            'app — a sandboxed app cannot start a container. From the project '
+            'folder:',
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 6),
           SelectableText(
-            'docker compose up -d\n'
-            'docker compose exec ollama ollama pull llama3.2:3b',
+            'docker compose up -d',
             style: theme.textTheme.bodySmall?.copyWith(
               fontFamily: 'Menlo',
               fontSize: 11.5,
@@ -241,5 +375,168 @@ class _StartHint extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Offers a model to download, and shows the download happening.
+///
+/// Only rendered when there is no usable model, because that is the only
+/// moment it helps — once a model is installed this is clutter, and the
+/// picker above is the thing to use.
+class _PullPanel extends StatelessWidget {
+  final String? busyWith;
+  final PullProgress? progress;
+
+  /// What Ollama already has, so a model cannot be offered as a download when
+  /// it is sitting there installed. Pressing Get on one is not destructive —
+  /// Ollama would find every layer present and finish at once — but offering
+  /// it says the app does not know what is on the machine.
+  final Set<String> installed;
+
+  final ValueChanged<String> onPull;
+  final VoidCallback onCancel;
+
+  const _PullPanel({
+    required this.busyWith,
+    required this.progress,
+    required this.installed,
+    required this.onPull,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final busy = busyWith != null;
+    final failed = progress?.hasFailed ?? false;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            busy ? 'Downloading $busyWith' : 'Download a model',
+            style: theme.textTheme.labelLarge,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            busy
+                ? 'This runs against the address above, so nothing leaves '
+                      'this Mac.'
+                : installed.isEmpty
+                // Only worth saying when nothing is installed. Once a model is
+                // there, Ollama is plainly running and the sentence reads as
+                // the app not having noticed.
+                ? 'Ollama has to be running first. The download happens '
+                      'here — no terminal needed.'
+                : 'Downloads happen here — no terminal needed.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          if (busy) ...[
+            // Null while the server is doing something unmeasurable — a
+            // determinate bar frozen at zero reads as broken, an indeterminate
+            // one reads as busy, which is the truth.
+            LinearProgressIndicator(value: progress?.fraction),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _describe(progress),
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+                TextButton(onPressed: onCancel, child: const Text('Cancel')),
+              ],
+            ),
+          ] else ...[
+            for (final m in SuggestedModel.catalogue)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(m.name, style: theme.textTheme.bodyMedium),
+                              const SizedBox(width: 6),
+                              Text(
+                                m.size,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              if (m.recommended) ...[
+                                const SizedBox(width: 6),
+                                Text(
+                                  'recommended',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          Text(
+                            m.note,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (installed.contains(m.name))
+                      Text(
+                        'Installed',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      )
+                    else
+                      FilledButton.tonal(
+                        onPressed: () => onPull(m.name),
+                        child: const Text('Get'),
+                      ),
+                  ],
+                ),
+              ),
+          ],
+
+          if (failed) ...[
+            const SizedBox(height: 6),
+            Text(
+              progress!.error!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Ollama reports per-layer bytes, so this says which step is happening
+  /// rather than implying a total the server never gives.
+  static String _describe(PullProgress? p) {
+    if (p == null) return '';
+    if (p.totalBytes <= 0) return p.status;
+    final done = (p.completedBytes / 1024 / 1024).round();
+    final total = (p.totalBytes / 1024 / 1024).round();
+    return '${p.status} · $done of $total MB';
   }
 }

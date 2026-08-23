@@ -86,9 +86,7 @@ class OllamaProvider implements AiProvider {
         return const AiAvailability(
           reachable: true,
           models: [],
-          reason:
-              'Ollama is running but has no models. Pull one with '
-              '"docker compose exec ollama ollama pull llama3.2:3b".',
+          reason: 'Ollama is running but has no models yet.',
         );
       }
 
@@ -105,7 +103,8 @@ class OllamaProvider implements AiProvider {
       );
     } on TimeoutException {
       return const AiAvailability.unavailable(
-        'No response from Ollama. Start it with "docker compose up -d".',
+        'The address answered but did not reply in time. If Ollama is '
+        'starting up, give it a moment and press Test.',
       );
     } on Object catch (e) {
       // Connection refused, DNS failure, malformed JSON — all the same to the
@@ -188,6 +187,76 @@ class OllamaProvider implements AiProvider {
     }
   }
 
+  /// Downloads [name], reporting progress as the server sends it.
+  ///
+  /// The point of this existing at all: before it, getting from "no models" to
+  /// a working setup meant leaving the app and running a docker command from a
+  /// README. The bytes are the same either way; what changes is whether a user
+  /// who does not use Docker can get there.
+  ///
+  /// Goes through the same [LocalEndpoint] gate as everything else — a pull is
+  /// a request to the configured host, and that host must be on this machine.
+  Stream<PullProgress> pullModel(String name) async* {
+    final base = _base;
+    if (base == null) {
+      yield const PullProgress(status: 'failed', error: _notLocalReason);
+      return;
+    }
+
+    final request = http.Request('POST', _uri(base, '/api/pull'))
+      ..headers['content-type'] = 'application/json'
+      ..body = jsonEncode({'model': name, 'stream': true});
+
+    http.StreamedResponse response;
+    try {
+      response = await _client.send(request).timeout(_requestTimeout);
+    } on Object catch (e) {
+      yield PullProgress(status: 'failed', error: _friendlyError(e));
+      return;
+    }
+
+    if (response.statusCode != 200) {
+      final body = await response.stream.bytesToString();
+      yield PullProgress(
+        status: 'failed',
+        error: body.contains('not found')
+            ? 'Ollama does not have a model called "$name".'
+            : 'Ollama returned HTTP ${response.statusCode}. ${body.trim()}',
+      );
+      return;
+    }
+
+    // Newline-delimited JSON, one object per progress update. No overall
+    // timeout: a multi-gigabyte download on a slow connection is legitimately
+    // long, and the user can cancel by walking away from the screen — unlike
+    // generation, where a stall means something is wedged.
+    final lines = response.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
+
+    await for (final line in lines) {
+      if (line.trim().isEmpty) continue;
+      Map<String, Object?> chunk;
+      try {
+        chunk = jsonDecode(line) as Map<String, Object?>;
+      } on Object {
+        continue; // a split line is not worth failing a download over
+      }
+
+      final error = chunk['error'];
+      if (error is String) {
+        yield PullProgress(status: 'failed', error: error);
+        return;
+      }
+
+      yield PullProgress(
+        status: chunk['status'] as String? ?? 'working',
+        completedBytes: (chunk['completed'] as num?)?.toInt() ?? 0,
+        totalBytes: (chunk['total'] as num?)?.toInt() ?? 0,
+      );
+    }
+  }
+
   @override
   void dispose() => _client.close();
 
@@ -196,8 +265,13 @@ class OllamaProvider implements AiProvider {
     if (text.contains('Connection refused') ||
         text.contains('Failed host lookup') ||
         text.contains('SocketException')) {
-      return 'Nothing is listening on that address. Start Ollama with '
-          '"docker compose up -d".';
+      // Deliberately does not blame Docker. From here the only observable
+      // fact is that nothing accepted a connection — whether Docker is
+      // stopped, the container is down, or Ollama is installed natively and
+      // not running are indistinguishable over a refused socket, and a
+      // message that guesses wrong sends the user to fix the wrong thing.
+      return 'Nothing is listening on that address. Start Ollama, then press '
+          'Test.';
     }
     return 'Could not reach Ollama: $text';
   }
