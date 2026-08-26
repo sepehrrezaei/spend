@@ -86,9 +86,7 @@ class OllamaProvider implements AiProvider {
         return const AiAvailability(
           reachable: true,
           models: [],
-          reason:
-              'Ollama is running but has no models. Pull one with '
-              '"docker compose exec ollama ollama pull llama3.2:3b".',
+          reason: 'Ollama is running but has no models installed.',
         );
       }
 
@@ -104,13 +102,84 @@ class OllamaProvider implements AiProvider {
             : 'Model "$model" is not installed; using "$active".',
       );
     } on TimeoutException {
-      return const AiAvailability.unavailable(
-        'No response from Ollama. Start it with "docker compose up -d".',
+      return AiAvailability.unavailable(
+        'Ollama did not respond within ${_probeTimeout.inSeconds}s. '
+        'The container may not be running.',
       );
     } on Object catch (e) {
       // Connection refused, DNS failure, malformed JSON — all the same to the
       // user: there is nothing to talk to.
       return AiAvailability.unavailable(_friendlyError(e));
+    }
+  }
+
+  /// Streams pull progress for [modelName] from Ollama's `/api/pull` endpoint.
+  ///
+  /// Each emitted [PullProgress] reflects the latest status line from Ollama.
+  /// The stream completes normally on success and with an error on failure.
+  ///
+  /// The loopback constraint is enforced here too — a bad host produces an
+  /// immediate error rather than a network request.
+  Stream<PullProgress> pullModel(String modelName) async* {
+    final base = _base;
+    if (base == null) throw AiException(_notLocalReason);
+
+    final request = http.Request('POST', _uri(base, '/api/pull'))
+      ..headers['content-type'] = 'application/json'
+      ..body = jsonEncode({'name': modelName, 'stream': true});
+
+    http.StreamedResponse response;
+    try {
+      response = await _client.send(request).timeout(_requestTimeout);
+    } on TimeoutException {
+      throw AiException(
+        'Ollama did not respond. Is the container running?',
+      );
+    } on Object catch (e) {
+      throw AiException(_friendlyError(e));
+    }
+
+    if (response.statusCode != 200) {
+      final body = await response.stream.bytesToString();
+      throw AiException(
+        'Ollama returned HTTP ${response.statusCode}. '
+        '${body.isEmpty ? "" : body.trim()}',
+      );
+    }
+
+    final lines = response.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .timeout(_generateTimeout);
+
+    await for (final line in lines) {
+      if (line.trim().isEmpty) continue;
+      Map<String, Object?> chunk;
+      try {
+        chunk = jsonDecode(line) as Map<String, Object?>;
+      } on Object {
+        continue;
+      }
+
+      final status = chunk['status'] as String? ?? '';
+      final total = chunk['total'];
+      final completed = chunk['completed'];
+
+      // Check for an error field first — some Ollama versions send an error
+      // payload before or instead of a status update.
+      final errorField = chunk['error'];
+      if (errorField is String && errorField.isNotEmpty) {
+        throw AiException('Pull failed: $errorField');
+      }
+
+      double? fraction;
+      if (total is num && total > 0 && completed is num) {
+        fraction = (completed / total).clamp(0.0, 1.0).toDouble();
+      }
+
+      yield PullProgress(status: status, fraction: fraction);
+
+      if (status == 'success') return;
     }
   }
 
@@ -196,9 +265,20 @@ class OllamaProvider implements AiProvider {
     if (text.contains('Connection refused') ||
         text.contains('Failed host lookup') ||
         text.contains('SocketException')) {
-      return 'Nothing is listening on that address. Start Ollama with '
-          '"docker compose up -d".';
+      return 'Nothing is listening on that address. '
+          'Check that the Ollama container is running.';
     }
     return 'Could not reach Ollama: $text';
   }
+}
+
+/// A single progress update from an `/api/pull` stream.
+class PullProgress {
+  /// The status string Ollama sent (e.g. "pulling manifest", "success").
+  final String status;
+
+  /// Download fraction in [0, 1], or `null` when there is no byte count yet.
+  final double? fraction;
+
+  const PullProgress({required this.status, this.fraction});
 }
